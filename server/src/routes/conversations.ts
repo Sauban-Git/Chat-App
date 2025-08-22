@@ -1,11 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { prisma } from "../db/prisma.js";
-import { fakeAuth } from "../middlewares/userMiddleware.js";
+import { userAuth } from "../middlewares/userMiddleware.js";
 import type { AuthenticatedRequest } from "../types/types.js";
 
 const router = Router();
 
-router.use(fakeAuth);
+router.use(userAuth);
 
 router.get("/:id/messages", async (req: Request, res: Response) => {
   const id = req.params.id;
@@ -39,7 +39,7 @@ router.get("/:id/messages", async (req: Request, res: Response) => {
     return res.status(200).json({
       messages,
     });
-    
+
   } catch (error) {
     console.error("Error oiccured while getting messages: ", error);
     return res.status(500).json({

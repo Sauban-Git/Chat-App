@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { prisma } from "../db/prisma.js";
+import jwt from "jsonwebtoken";
+import { COOKIE_NAME, JWT_EXPIRES_IN, JWT_SECRET } from "../config/jwt.js";
 
 const router = Router();
 
@@ -26,6 +28,22 @@ router.post("/register", async (req: Request, res: Response) => {
           email,
         },
       });
+
+      const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
+        expiresIn: JWT_EXPIRES_IN,
+      });
+
+      res.cookie(COOKIE_NAME, token, {
+        httpOnly: process.env.HTTP_ONLY === "true",
+        sameSite: process.env.SAME_SITE as
+          | "lax"
+          | "strict"
+          | "none"
+          | undefined,
+        secure: process.env.SECURE === "true",
+        maxAge: 1000 * 60 * 60 * 1, // 1 hr
+      });
+
       return res.status(200).json({
         user,
       });
@@ -54,9 +72,21 @@ router.post("/login", async (req: Request, res: Response) => {
       return res.status(403).json({
         error: "User not found!",
       });
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
+
+    res.cookie(COOKIE_NAME, token, {
+      httpOnly: process.env.HTTP_ONLY === "true",
+      sameSite: process.env.SAME_SITE as "lax" | "strict" | "none" | undefined,
+      secure: process.env.SECURE === "true",
+      maxAge: 1000 * 60 * 60 * 1, // 1 hr
+    });
+
     return res.status(200).json({
-        user
-    })
+      user,
+    });
   } catch (error) {
     console.error("Error while prisma user: ", error);
     return res.status(500).json({

@@ -1,11 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { prisma } from "../db/prisma.js";
 import type { AuthenticatedRequest } from "../types/types.js";
-import { fakeAuth } from "../middlewares/userMiddleware.js";
+import { userAuth } from "../middlewares/userMiddleware.js";
 
 const router = Router();
 
-router.get("/", fakeAuth, async (req: Request, res: Response) => {
+router.get("/", userAuth, async (req: Request, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
   try {
     const users = await prisma.user.findMany({
