@@ -43,4 +43,8 @@ model Message {
   senderId       String
   text           String
   createdAt      DateTime     @default(now())
+
+  // ✅ New fields
+  deliveredAt    DateTime?    // Timestamp when recipient receives message
+  readAt         DateTime?    // Timestamp when recipient reads message
 }

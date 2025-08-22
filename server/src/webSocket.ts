@@ -11,23 +11,14 @@ import {
 import { COOKIE_NAME, JWT_SECRET } from "./config/jwt.js";
 import { presenceEmitter } from "./utils/utils.js";
 
-// Custom socket type with typed `data` field
 interface AuthenticatedSocket extends Socket {
   data: {
     userId: string;
   };
 }
 
-// Global map: conversationId -> Set of sockets subscribed to that conversation's typing events
-const conversationTypingSockets = new Map<
-  string,
-  Set<AuthenticatedSocket>
->();
-
-// Track which conversations we have subscribed to Redis typing channel for
+const conversationTypingSockets = new Map<string, Set<AuthenticatedSocket>>();
 const redisTypingSubscribedConversations = new Set<string>();
-
-// Track unsubscribe functions for Redis typing subscriptions per conversation
 const redisTypingUnsubscribers = new Map<string, () => Promise<void>>();
 
 export const setUpSocket = (server: HTTPServer) => {
@@ -39,7 +30,6 @@ export const setUpSocket = (server: HTTPServer) => {
     },
   });
 
-  // Middleware for authentication (same as before) ...
   io.use((socket, next) => {
     try {
       const cookies = socket.handshake.headers.cookie;
@@ -66,14 +56,63 @@ export const setUpSocket = (server: HTTPServer) => {
     }
   });
 
-  io.on("connection", (socket: AuthenticatedSocket) => {
+  io.on("connection", async (socket: AuthenticatedSocket) => {
     const userId = socket.data.userId;
     if (!userId) return socket.disconnect();
 
     console.log(`✅ User connected: ${userId}`);
     publishPresence(userId, "online");
 
-    // Presence listener for the connected socket
+    // ✅ Mark all undelivered messages to this user as delivered
+    try {
+      const conversations = await prisma.conversation.findMany({
+        where: {
+          OR: [{ user1Id: userId }, { user2Id: userId }],
+        },
+        select: { id: true },
+      });
+
+      const conversationIds = conversations.map((c) => c.id);
+
+      if (conversationIds.length > 0) {
+        const deliveredAt = new Date();
+
+        // Get message IDs before updating
+        const undeliveredMessages = await prisma.message.findMany({
+          where: {
+            conversationId: { in: conversationIds },
+            senderId: { not: userId },
+            deliveredAt: null,
+          },
+          select: { id: true, conversationId: true },
+        });
+
+        const messageIds = undeliveredMessages.map((m) => m.id);
+
+        if (messageIds.length > 0) {
+          await prisma.message.updateMany({
+            where: { id: { in: messageIds } },
+            data: { deliveredAt },
+          });
+
+          for (const message of undeliveredMessages) {
+            io.to(message.conversationId).emit("message:delivered", {
+              messageId: message.id,
+              userId,
+              deliveredAt: deliveredAt.toISOString(),
+            });
+          }
+
+          console.log(
+            `📦 Delivered ${messageIds.length} messages for user ${userId}`
+          );
+        }
+      }
+    } catch (err) {
+      console.error("❌ Error marking messages as delivered:", err);
+    }
+
+    // Presence listener
     const presenceListener = (data: {
       userId: string;
       status: "online" | "offline";
@@ -82,7 +121,6 @@ export const setUpSocket = (server: HTTPServer) => {
     };
     presenceEmitter.on("presence:update", presenceListener);
 
-    // Helper to clean up socket from conversationTypingSockets map
     async function leaveConversationTyping(conversationId: string) {
       const socketsSet = conversationTypingSockets.get(conversationId);
       if (!socketsSet) return;
@@ -97,17 +135,18 @@ export const setUpSocket = (server: HTTPServer) => {
           try {
             await unsubscribe();
           } catch (err) {
-            console.error(`Error unsubscribing from Redis typing for conversation ${conversationId}`, err);
+            console.error(
+              `Error unsubscribing from Redis typing for conversation ${conversationId}`,
+              err
+            );
           }
           redisTypingUnsubscribers.delete(conversationId);
         }
       }
     }
 
-    // Handle joining a conversation room
     socket.on("conversation:join", async (conversationId: string) => {
       try {
-        // Validate user is in the conversation
         const isParticipant = await prisma.conversation.findFirst({
           where: {
             id: conversationId,
@@ -124,7 +163,7 @@ export const setUpSocket = (server: HTTPServer) => {
         socket.join(conversationId);
         console.log(`📥 ${userId} joined conversation ${conversationId}`);
 
-        // Add socket to local map
+        // Track typing subscriptions
         let socketsSet = conversationTypingSockets.get(conversationId);
         if (!socketsSet) {
           socketsSet = new Set();
@@ -132,22 +171,62 @@ export const setUpSocket = (server: HTTPServer) => {
         }
         socketsSet.add(socket);
 
-        // Subscribe to Redis typing channel once per conversation
+        // Subscribe to Redis typing (same as before)
         if (!redisTypingSubscribedConversations.has(conversationId)) {
-          const unsubscribe = await subscribeToTyping(conversationId, (data) => {
-            // Emit typing:update to all sockets except the typing user
-            const sockets = conversationTypingSockets.get(conversationId);
-            if (!sockets) return;
+          const unsubscribe = await subscribeToTyping(
+            conversationId,
+            (data) => {
+              const sockets = conversationTypingSockets.get(conversationId);
+              if (!sockets) return;
 
-            for (const s of sockets) {
-              if (s.data.userId !== data.userId) {
-                s.to(conversationId).emit("typing:update", data);
+              for (const s of sockets) {
+                if (s.data.userId !== data.userId) {
+                  s.to(conversationId).emit("typing:update", data);
+                }
               }
             }
-          });
+          );
 
           redisTypingSubscribedConversations.add(conversationId);
           redisTypingUnsubscribers.set(conversationId, unsubscribe);
+        }
+
+        // ✅ Mark unread messages as read
+        try {
+          const unreadMessages = await prisma.message.findMany({
+            where: {
+              conversationId,
+              senderId: { not: userId },
+              readAt: null,
+            },
+            select: { id: true },
+          });
+
+          const readAt = new Date();
+
+          if (unreadMessages.length > 0) {
+            const messageIds = unreadMessages.map((m) => m.id);
+
+            await prisma.message.updateMany({
+              where: { id: { in: messageIds } },
+              data: { readAt },
+            });
+
+            // Emit read event per message
+            for (const { id } of unreadMessages) {
+              io.to(conversationId).emit("message:read", {
+                messageId: id,
+                userId,
+                readAt: readAt.toISOString(),
+              });
+            }
+
+            console.log(
+              `👁️ Marked ${unreadMessages.length} messages as read in conversation ${conversationId}`
+            );
+          }
+        } catch (err) {
+          console.error("Failed to mark messages as read:", err);
         }
       } catch (err) {
         console.error("Join conversation error:", err);
@@ -157,16 +236,14 @@ export const setUpSocket = (server: HTTPServer) => {
       }
     });
 
-    // Handle leaving a conversation
     socket.on("conversation:leave", async (conversationId: string) => {
       socket.leave(conversationId);
       console.log(`📤 ${userId} left conversation ${conversationId}`);
 
       await leaveConversationTyping(conversationId);
-      publishTypingStatus(conversationId, userId, false); // Notify others
+      publishTypingStatus(conversationId, userId, false);
     });
 
-    // Typing events
     socket.on(
       "typing:start",
       ({ conversationId }: { conversationId: string }) => {
@@ -181,56 +258,44 @@ export const setUpSocket = (server: HTTPServer) => {
       }
     );
 
-    // Sending a message (same as before)
-    socket.on(
-      "message:send",
-      async ({
-        conversationId,
-        text,
-      }: {
-        conversationId: string;
-        text: string;
-      }) => {
-        try {
-          const isParticipant = await prisma.conversation.findFirst({
-            where: {
-              id: conversationId,
-              OR: [{ user1Id: userId }, { user2Id: userId }],
-            },
+    socket.on("message:send", async ({ conversationId, text }) => {
+      try {
+        const isParticipant = await prisma.conversation.findFirst({
+          where: {
+            id: conversationId,
+            OR: [{ user1Id: userId }, { user2Id: userId }],
+          },
+        });
+
+        if (!isParticipant) {
+          return socket.emit("message:error", {
+            message: "You are not part of this conversation.",
           });
-
-          if (!isParticipant) {
-            return socket.emit("message:error", {
-              message: "You are not part of this conversation.",
-            });
-          }
-
-          const message = await prisma.message.create({
-            data: {
-              text,
-              senderId: userId,
-              conversationId,
-            },
-            include: {
-              sender: { select: { id: true, name: true, email: true } },
-            },
-          });
-
-          io.to(conversationId).emit("message:new", message);
-        } catch (err) {
-          console.error("Message error:", err);
-          socket.emit("message:error", { message: "Failed to send message." });
         }
-      }
-    );
 
-    // Handle disconnect
+        const message = await prisma.message.create({
+          data: {
+            text,
+            senderId: userId,
+            conversationId,
+          },
+          include: {
+            sender: { select: { id: true, name: true, email: true } },
+          },
+        });
+
+        io.to(conversationId).emit("message:new", message);
+      } catch (err) {
+        console.error("Message error:", err);
+        socket.emit("message:error", { message: "Failed to send message." });
+      }
+    });
+
     socket.on("disconnect", async () => {
       console.log(`❌ User disconnected: ${userId}`);
 
       presenceEmitter.off("presence:update", presenceListener);
 
-      // Remove socket from all conversation typing subscriptions
       for (const [conversationId, socketsSet] of conversationTypingSockets) {
         if (socketsSet.has(socket)) {
           socketsSet.delete(socket);
@@ -245,7 +310,10 @@ export const setUpSocket = (server: HTTPServer) => {
               try {
                 await unsubscribe();
               } catch (err) {
-                console.error(`Error unsubscribing from Redis typing for conversation ${conversationId}`, err);
+                console.error(
+                  `Error unsubscribing from Redis typing for conversation ${conversationId}`,
+                  err
+                );
               }
               redisTypingUnsubscribers.delete(conversationId);
             }
