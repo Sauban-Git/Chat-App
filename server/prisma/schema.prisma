@@ -6,10 +6,41 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  name           String?
+  conversations1 Conversation[]  @relation("User1Conversations")
+  conversations2 Conversation[]  @relation("User2Conversations")
+  messages       Message[]
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  user1     User     @relation("User1Conversations", fields: [user1Id], references: [id])
+  user1Id   String
+  user2     User     @relation("User2Conversations", fields: [user2Id], references: [id])
+  user2Id   String
+  messages  Message[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([user1Id, user2Id]) // ensure only one conversation between two users
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+  sender         User         @relation(fields: [senderId], references: [id])
+  senderId       String
+  text           String
+  createdAt      DateTime     @default(now())
 }

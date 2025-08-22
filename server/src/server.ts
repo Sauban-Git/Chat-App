@@ -1,15 +1,24 @@
-import express from "express"
-import dotenv from "dotenv"
-import cors from "cors"
-dotenv.config()
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import { usersRouter } from "./routes/users.js";
+import { authRouter } from "./routes/auth.js";
+import { conversationsRouter } from "./routes/conversations.js";
+import cookieParser from "cookie-parser";
 
-export const app = express()
+dotenv.config();
 
+export const app = express();
+
+app.use(express.json());
 app.use(
   cors({
     origin: "*",
     credentials: true,
   })
 );
+app.use(cookieParser());
 
-app.use(express.json())
+app.use("/auth", authRouter);
+app.use("/conversations", conversationsRouter);
+app.use("/users", usersRouter);
