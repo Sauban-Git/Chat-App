@@ -9,7 +9,7 @@ import { useMessageListStore } from "../store/messagesListStore";
 import { useUsersListStore } from "../store/conversationListStore";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 
-const SOCKET_URL = "http://localhost:3000"; // Update if needed
+const SOCKET_URL = import.meta.env.VITE_SERVER_URL; // Update if needed
 
 export const useWebsocket = () => {
   const socketRef = useRef<Socket | null>(null);
