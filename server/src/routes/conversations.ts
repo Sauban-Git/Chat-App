@@ -17,8 +17,6 @@ router.get("/:id/messages", async (req: Request, res: Response) => {
     });
 
   try {
-    
-
     const messages = await prisma.message.findMany({
       where: {
         conversationId: id,
@@ -30,22 +28,48 @@ router.get("/:id/messages", async (req: Request, res: Response) => {
         createdAt: "asc",
       },
     });
-    if (messages.length === 0) {
-      return res
-        .status(403)
-        .json({ error: "Access denied or no messages found" });
-    }
-
     return res.status(200).json({
       messages,
     });
-
   } catch (error) {
     console.error("Error oiccured while getting messages: ", error);
     return res.status(500).json({
       error: "There was an issue in getting messages. Please try again.",
     });
+  }
+});
 
+router.post("/start", async (req: Request, res: Response) => {
+  const userId = (req as AuthenticatedRequest).userId;
+  const { to } = req.body;
+  if (!to)
+    return res.status(400).json({
+      error: "Error initializing conversation",
+    });
+  try {
+    const [user1Id, user2Id] = [userId, to].sort(); // ensures consistent ordering
+
+    const conversation = await prisma.conversation.upsert({
+      where: {
+        user1Id_user2Id: {
+          user1Id,
+          user2Id,
+        },
+      },
+      update: {},
+      create: {
+        user1Id,
+        user2Id,
+      },
+    });
+    return res.status(200).json({
+      conversation,
+    });
+  } catch (error) {
+    console.error("Error: ", error);
+    return res.status(500).json({
+      error: "Error while initializing conversation",
+    });
   }
 });
 

@@ -22,3 +22,4 @@ app.use(cookieParser());
 app.use("/auth", authRouter);
 app.use("/conversations", conversationsRouter);
 app.use("/users", usersRouter);
+app.use("/message", usersRouter);
