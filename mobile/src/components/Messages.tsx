@@ -2,9 +2,10 @@ import { useRef, useState } from "react";
 import { MessageList } from "./MessageList";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
-import { useMessageSocket } from "../customHooks/useMessageSocket";
-import { useUserInfoStore } from "../store/userInfoStore";
-import { usePresenceSocket } from "../customHooks/usePresenceSocket";
+// import { useUserInfoStore } from "../store/userInfoStore";
+import axios from "../utils/axios";
+import type { MessageFromApi } from "../types/types";
+import { useMessageListStore } from "../store/messagesListStore";
 
 export const Messages = () => {
   const lastMessageRef = useRef<HTMLDivElement>(null);
@@ -12,22 +13,37 @@ export const Messages = () => {
     (state) => state.setConversationDisplay
   );
   const [newMessage, setNewMessage] = useState("");
-  const { sendMessage } = useMessageSocket(); // ✅ custom hook
   const conversationId = useConversationIdStore(
     (state) => state.conversationId
   );
+  const setMessaageList = useMessageListStore((s) => s.setMessageList)
 
-  const user = useUserInfoStore((s) => s.user);
-const { startTyping, stopTyping } = usePresenceSocket(user!.id);
+  // const user = useUserInfoStore((s) => s.user);
 
   const goBack = () => {
     setConversationDisplay(true);
   };
 
+
+  const sendMessage = async(conversationId: string, text: string) => {
+    try {
+
+      const {data} = await axios.post<{message: MessageFromApi}>("/message/", {
+        conversationId,
+        text
+      })
+
+      setMessaageList((prev) => [...prev, data.message])
+
+    }catch(error) {
+      console.error("Error: ", error)
+    }
+  }
+
   const handleSend = () => {
     if (!newMessage.trim()) return;
 
-    sendMessage({ conversationId, text: newMessage }); // ✅ call socket emitter
+    sendMessage( conversationId, newMessage ); // ✅ call socket emitter
     setNewMessage(""); // reset input
   };
 
@@ -75,12 +91,12 @@ const { startTyping, stopTyping } = usePresenceSocket(user!.id);
           <input
             value={newMessage}
             onFocus={() => {
-              startTyping();
+              // startTyping();
               setTimeout(() => {
                 lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
               }, 100);
             }}
-            onBlur={() => stopTyping()}
+            // onBlur={() => stopTyping()}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             type="text"

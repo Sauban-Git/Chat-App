@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { usePresenceSocket } from "../customHooks/usePresenceSocket";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { useUserInfoStore } from "../store/userInfoStore";
 import { usePresenceStore } from "../store/userPresenceStore";
@@ -16,7 +15,6 @@ export const MessageList = ({
   const setMessageList = useMessageListStore((state) => state.setMessageList);
   const user = useUserInfoStore((state) => state.user);
 
-  usePresenceSocket(user!.id);
 
   const typingStatus = usePresenceStore((state) => state.typingStatus);
   const conversationId = useConversationIdStore((state) => state.conversationId);

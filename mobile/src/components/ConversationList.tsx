@@ -1,18 +1,15 @@
 import { useUsersListStore, type User } from "../store/conversationListStore";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 import { useErrorContentStore } from "../store/errorStore";
-import { useConversationSocket } from "../customHooks/useConversationSocket";
-import { useUserInfoStore } from "../store/userInfoStore"; // import your user info store
 import axios from "../utils/axios";
 import { useEffect } from "react";
 import { useConversationIdStore } from "../store/conversationIdStore";
+import type { Conversation } from "../types/types";
 
 export const ConversationList = () => {
   // Get logged in userId from userInfoStore
-  const userId = useUserInfoStore((state) => state.user!.id);
 
   // Activate socket listeners with logged in userId
-  const {initiateConversation} = useConversationSocket(userId);
 
   const { users, error } = useUsersListStore();
   const setMessageDisplay = useComponentsDisplayStore(
@@ -29,11 +26,17 @@ export const ConversationList = () => {
     setUsers(data.users);
   };
 
-  const openMessage = (reciepentId: string) => {
-    initiateConversation(reciepentId, (conversationId) => {
-      setConversationId(conversationId)
-    })
-    setMessageDisplay(true)
+  const openMessage = async(reciepentId: string) => {
+    try {
+      const {data} = await axios.post<{conversation: Conversation}>("/conversations/start/", {
+        to: reciepentId
+      })
+      setConversationId(data.conversation.id)
+      setMessageDisplay(true)
+    }catch (error) {
+      console.log(error)
+      setErrorContent("Error while initiating conversation", true)
+    }
   }
 
   if (error) {

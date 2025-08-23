@@ -5,6 +5,7 @@ import { usersRouter } from "./routes/users.js";
 import { authRouter } from "./routes/auth.js";
 import { conversationsRouter } from "./routes/conversations.js";
 import cookieParser from "cookie-parser";
+import { messageRouter } from "./routes/message.js";
 
 dotenv.config();
 
@@ -22,4 +23,4 @@ app.use(cookieParser());
 app.use("/auth", authRouter);
 app.use("/conversations", conversationsRouter);
 app.use("/users", usersRouter);
-app.use("/message", usersRouter);
+app.use("/message", messageRouter);
