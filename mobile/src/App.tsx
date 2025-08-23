@@ -5,8 +5,8 @@ import { Messages } from "./components/Messages";
 function App() {
   return (
     <>
-    <Messages/>
-    {/* <Conversation/> */}
+    {/* <Messages/> */}
+    <Conversation/>
     </>
   );
 }

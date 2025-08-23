@@ -1,6 +1,9 @@
+import { useRef } from "react";
 import { MessageList } from "./MessageList";
 
 export const Messages = () => {
+  const lastMessageRef = useRef<HTMLDivElement>(null);
+
   return (
     <div className="rounded-xl p-4 min-h-[100dvh]">
       <div className="sticky top-0 flex justify-between items-center bg-white">
@@ -28,16 +31,25 @@ export const Messages = () => {
         </div>
       </div>
       <div>
-        <MessageList />
+        <MessageList lastMessageRef={lastMessageRef} />
       </div>
 
       {/* Input Box */}
       <div className="sticky bottom-0 inline-block w-full py-3 bg-white">
         <div className="flex justify-between items-center">
-          <input type="text" placeholder="Type message" className="p-3 bg-neutral-200 rounded-xl " />
+          <input
+            onClick={() => {
+              if (lastMessageRef.current) {
+                lastMessageRef.current.scrollIntoView({ behavior: "smooth" });
+              }
+            }}
+            type="text"
+            placeholder="Type message"
+            className="p-3 bg-neutral-200 rounded-xl "
+          />
           <button>
             <svg
-            className="h-12 w-12 bg-neutral-500 rounded-2xl p-2"
+              className="h-12 w-12 bg-neutral-500 rounded-2xl p-2"
               width="800px"
               height="800px"
               viewBox="0 0 24 24"
