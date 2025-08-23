@@ -2,7 +2,7 @@ import { ConversationList } from "./ConversationList";
 
 export const Conversation = () => {
   return (
-    <div className="rounded-xl p-4">
+    <div className="rounded-xl p-4 h-[100dvh]">
       <div className="sticky top-0 flex justify-between items-center bg-white">
         <div className="flex space-x-6">
           <div>
