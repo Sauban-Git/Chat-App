@@ -1,24 +1,17 @@
-import express from "express";
-import dotenv from "dotenv";
-import cors from "cors";
-import { usersRouter } from "./routes/users.js";
-import { authRouter } from "./routes/auth.js";
-import { conversationsRouter } from "./routes/conversations.js";
-import cookieParser from "cookie-parser";
+import { app } from "./app.js"
+import { createServer } from "node:http"
+import { setUpSocket } from "./webSocket.js"
 
-dotenv.config();
+const port = Number(process.env.PORT) || 3000
 
-export const app = express();
+const server = createServer(app)
 
-app.use(express.json());
-app.use(
-  cors({
-    origin: "*",
-    credentials: true,
-  })
-);
-app.use(cookieParser());
+setUpSocket(server)
 
-app.use("/auth", authRouter);
-app.use("/conversations", conversationsRouter);
-app.use("/users", usersRouter);
+server.listen(port, '0.0.0.0', () => {
+    console.log(`App running on port ${port}`)
+})
+
+server.on("error", (err) => {
+  console.error("Server error:", err);
+});
