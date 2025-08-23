@@ -1,20 +1,24 @@
 import { useEffect } from "react";
 import { useUsersListStore } from "../store/conversationListStore";
-import { Error } from "./Error";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
+import { useErrorContentStore } from "../store/errorStore";
 
 export const ConversationList = () => {
   const { users, loading, error, fetchUsers } = useUsersListStore();
   const setMessageDisplay = useComponentsDisplayStore((state) => state.setMessageDisplay)
+  const setErrorContent = useErrorContentStore((state) => state.setErrorContent)
 
   useEffect(() => {
     fetchUsers();
-  }, [fetchUsers]);
+  }, []);
 
   if (loading) return <div>Loading users...</div>;
-  if (error) return <div><Error error={error}/></div>;
+  if (error) {
+    setErrorContent(error, true)
+  }
   return (
     <div className="overflow-y-auto flex-1 space-y-2">
+      <div className="pt-3 font-semibold">Chats</div>
       {users.map((user) => (
         <div key={user.id} onClick={() => setMessageDisplay(true)} className="flex space-x-2 space-y-2">
           <div className="items-center flex">

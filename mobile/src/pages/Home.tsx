@@ -45,7 +45,7 @@ export const Home = () => {
     };
 
     init();
-  }, [conversationDisplay, loginDisplay, messageDisplay, setConversationDisplay, setSignupDisplay, userInfoDisplay]);
+  }, []);
 
   // ✅ Block conversation if user is not present
   if (loading) return <LoadingScreen />;

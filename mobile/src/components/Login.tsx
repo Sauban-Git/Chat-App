@@ -4,6 +4,8 @@ import { motion } from "framer-motion";
 import { useUserInfoStore } from "../store/userInfoStore";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 import type { UserInfoApi } from "../types/types";
+import type { AxiosError } from "axios";
+import { useErrorContentStore } from "../store/errorStore";
 
 export const Login = () => {
   const [loading, setloading] = useState(false);
@@ -15,6 +17,7 @@ export const Login = () => {
   const setSignupDisplay = useComponentsDisplayStore(
     (state) => state.setSignupDisplay
   );
+  const setErrorContent = useErrorContentStore((state) => state.setErrorContent)
 
   const submit = async () => {
     setloading(true);
@@ -27,8 +30,9 @@ export const Login = () => {
 
       setUser(data.user);
       setConversationDisplay(true);
-
     } catch (error) {
+      const err = error as AxiosError<{ error: string }>;
+      setErrorContent(err?.response?.data?.error ?? null, true)
       console.error("Error while axios fetching", error);
     } finally {
       setloading(false);
@@ -68,8 +72,14 @@ export const Login = () => {
               {loading ? "Logging in..." : "Login to your account"}
             </button>
             <div className="p-3 m-3 text-center text-gray-500 ">
-            Need an account? <button className="text-blue-500 underline" onClick={() => setSignupDisplay(true) }>Signup</button>
-          </div>
+              Need an account?{" "}
+              <button
+                className="text-blue-500 underline"
+                onClick={() => setSignupDisplay(true)}
+              >
+                Signup
+              </button>
+            </div>
           </div>
         </div>
       </motion.div>

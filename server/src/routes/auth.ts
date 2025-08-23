@@ -2,8 +2,29 @@ import { Router, type Request, type Response } from "express";
 import { prisma } from "../db/prisma.js";
 import jwt from "jsonwebtoken";
 import { COOKIE_NAME, JWT_EXPIRES_IN, JWT_SECRET } from "../config/jwt.js";
+import { userAuth } from "../middlewares/userMiddleware.js";
+import type { AuthenticatedRequest } from "../types/types.js";
 
 const router = Router();
+
+router.get("/info", userAuth, async (req: Request, res: Response) => {
+  const userId = (req as AuthenticatedRequest).userId
+  try{
+    const user = await prisma.user.findUnique({
+      where: {
+        id: userId
+      }
+    })
+    return res.status(200).json({
+      user
+    })
+  }catch (error) {
+    console.error("Error fetching info: ", error)
+    return res.status(500).json({
+      error: "Error getting user info"
+    })
+  }
+})
 
 router.post("/register", async (req: Request, res: Response) => {
   const { name, email } = req.body;
