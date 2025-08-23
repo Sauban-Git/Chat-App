@@ -7,7 +7,7 @@ import { handleConnection } from "./handlers/connectionHandler.js";
 export const setUpSocket = (server: HTTPServer) => {
   const io = new SocketIOServer(server, {
     cors: {
-      origin: "*",
+      origin: "http://192.168.31.55:5173",
       methods: ["GET", "POST"],
       credentials: true,
     },

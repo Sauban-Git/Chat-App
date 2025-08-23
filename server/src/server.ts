@@ -1,6 +1,6 @@
 import { app } from "./app.js"
 import { createServer } from "node:http"
-import { setUpSocket } from "./webSocket.js"
+import { setUpSocket } from "./socket/index.js"
 
 const port = Number(process.env.PORT) || 3000
 

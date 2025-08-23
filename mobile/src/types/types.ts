@@ -1,41 +1,35 @@
-type MessageStatus = {
-  status: "SENT" | "DELIVERED" | "READ";
-  updatedAt: string;
-};
-
 export interface MessageFromApi {
   id: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-  type: string;
-  sender: {
-    id: string;
-    name: string;
-  };
-  statuses?: MessageStatus[];
+  createdAt: Date;
+  conversationId: string;
+  senderId: string;
+  text: string;
+  deliveredAt: Date | null;
+  readAt: Date | null;
 }
 
-export interface ConversationFromApi {
+export interface MessageWithSender extends MessageFromApi {
+  sender: {
+    id: string;
+    name: string | null;
+    email: string;
+  };
+}
+
+export interface Conversation {
+  id: string;
+  lastMessage: MessageWithSender | null;
+}
+
+export interface UserList {
   id: string;
   name: string | null;
-  isGroup: boolean;
-  createdAt: string;
-  updatedAt: string;
-  Message: MessageFromApi[];
-  participants: {
-    user: {
-      id: string;
-      name: string;
-      phoneNumber: string;
-    };
-  }[];
+  email: string;
+  conversation: Conversation | null;
 }
 
 export interface UserInfoApi {
-  id: string;
-  name: string;
-  email: string;
-  createdAt: string;
-  updatedAt: string;
+  id: string
+  name?: string
+  email: string
 }

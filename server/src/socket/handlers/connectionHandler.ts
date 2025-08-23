@@ -1,5 +1,5 @@
 import { Server as SocketIOServer } from "socket.io";
-import { AuthenticatedSocket } from "../types.js";
+import type { AuthenticatedSocket } from "../types.js";
 import { registerConversationHandlers } from "./conversation.js";
 import { registerMessageHandlers } from "./message.js";
 import { registerPresenceHandlers } from "./presence.js";

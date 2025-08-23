@@ -1,16 +1,16 @@
+// src/store/conversationListStore.ts
 import { create } from "zustand";
-import axios from "../utils/axios";
-import type { AxiosError } from "axios";
 
-interface User {
+export interface User {
   id: string;
   name: string;
   email: string;
+  presence?: "online" | "offline"; // optional presence flag at user level
   conversation: {
     id: string;
     lastMessage: {
       id: string;
-      content: string;
+      text: string;
       createdAt: string;
       sender: {
         id: string;
@@ -23,30 +23,49 @@ interface User {
 
 interface UsersListStore {
   users: User[];
-  loading: boolean;
   error: string | null;
-  fetchUsers: () => Promise<void>;
+
+  setUsers: (users: User[]) => void;
+  updateLastMessage: (
+    conversationId: string,
+    newLastMessage: NonNullable<User["conversation"]>["lastMessage"]
+  ) => void;
+  updateUserPresence: (userId: string, isOnline: boolean) => void;
   clearUsers: () => void;
 }
 
 export const useUsersListStore = create<UsersListStore>((set) => ({
   users: [],
-  loading: false,
   error: null,
 
-  fetchUsers: async () => {
-    set({ loading: true, error: null });
-    try {
-      const response = await axios.get("/users/");
-      set({ users: response.data.users, loading: false });
-    } catch (error) {
-        const err = error as AxiosError<{ error: string }>;
-      set({
-        error: err?.response?.data?.error || "Failed to fetch users",
-        loading: false,
-      });
-    }
-  },
+  setUsers: (users) => set({ users }),
+
+  updateLastMessage: (conversationId, newLastMessage) =>
+    set((state) => ({
+      users: state.users.map((user) =>
+        user.conversation?.id === conversationId
+          ? {
+              ...user,
+              conversation: {
+                ...user.conversation,
+                lastMessage: newLastMessage,
+              },
+            }
+          : user
+      ),
+    })),
+
+  updateUserPresence: (userId, isOnline) =>
+    set((state) => ({
+      users: state.users.map((user) =>
+        user.id === userId
+          ? {
+              ...user,
+              presence: isOnline ? "online" : "offline",
+            }
+          : user
+      ),
+    })),
 
   clearUsers: () => set({ users: [], error: null }),
 }));
