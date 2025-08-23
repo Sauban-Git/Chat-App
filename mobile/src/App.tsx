@@ -1,13 +1,10 @@
 import "./App.css";
-import { Conversation } from "./components/Conversation";
-import { Messages } from "./components/Messages";
+import { Home } from "./pages/Home";
+
 
 function App() {
   return (
-    <>
-    {/* <Messages/> */}
-    <Conversation/>
-    </>
+    <Home/>
   );
 }
 

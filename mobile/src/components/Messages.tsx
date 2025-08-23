@@ -1,13 +1,27 @@
 import { useRef } from "react";
 import { MessageList } from "./MessageList";
+import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 
 export const Messages = () => {
   const lastMessageRef = useRef<HTMLDivElement>(null);
+  const setConversationDisplay = useComponentsDisplayStore((state) => state.setConversationDisplay)
+
+  const goBack = () => {
+    setConversationDisplay(true)
+  }
 
   return (
     <div className="rounded-xl p-4 min-h-[100dvh]">
       <div className="sticky top-0 flex justify-between items-center bg-white">
         <div className="flex space-x-6">
+          <div className="flex items-center">
+            <button onClick={goBack}>
+              <img
+                className="h-8 aspect-square object-cover rounded-full"
+                src="/images/back.svg"
+              />
+            </button>
+          </div>
           <div>
             <img
               className="h-10 aspect-square object-cover rounded-full"

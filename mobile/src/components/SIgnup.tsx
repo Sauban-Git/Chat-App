@@ -1,25 +1,34 @@
 import { useRef, useState } from "react";
 import axios from "../utils/axios"
-import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import type { UserInfoApi } from "../types/types";
+import { useUserInfoStore } from "../store/userInfoStore";
+import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 
 export const Signup = () => {
   const [loading, setloading] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
+  const setUser = useUserInfoStore((state) => state.setUser)
+  const setConversationDisplay = useComponentsDisplayStore((state) => state.setConversationDisplay)
+  const setLoginDisplay = useComponentsDisplayStore((state) => state.setLoginDisplay)
 
   const submit = async () => {
     setloading(true);
     const name = nameRef.current?.value;
     const email = emailRef.current?.value;
+
     if (!name || !email) return setloading(false);
+
     try {
-      await axios.post("/auth/register", {
+      const { data } = await axios.post<{user: UserInfoApi}>("/auth/register", {
         name,
         email,
       });
-      navigate("/loading");
+
+      setUser(data.user)
+      setConversationDisplay(true)
+      
     } catch (error) {
       console.error("Error while axios fetching", error);
     } finally {
@@ -30,7 +39,7 @@ export const Signup = () => {
   return (
     <div>
       <motion.div
-        className="flex justify-center items-center min-h-screen bg-gradient-to-br from-blue-50 to-blue-200"
+        className="flex justify-center items-center min-h-[100dvh] bg-gradient-to-br from-blue-50 to-blue-200"
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
@@ -49,7 +58,6 @@ export const Signup = () => {
             />
             <input
               type="text"
-              maxLength={10}
               placeholder="abcdef@xyz.com"
               ref={emailRef}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#25D350]"
@@ -66,6 +74,9 @@ export const Signup = () => {
             >
               {loading ? "Logging in..." : "Register"}
             </button>
+            <div className="p-3 m-3 text-center text-gray-500">
+            Already have an account?? <button className="text-blue-500 underline" onClick={() => setLoginDisplay(true)}>Login</button>
+          </div>
           </div>
         </div>
       </motion.div>

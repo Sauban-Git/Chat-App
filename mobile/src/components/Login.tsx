@@ -1,25 +1,33 @@
 import { useRef, useState } from "react";
-import axios from "../utils/axios"
-import { useNavigate } from "react-router-dom";
+import axios from "../utils/axios";
 import { motion } from "framer-motion";
+import { useUserInfoStore } from "../store/userInfoStore";
+import { useComponentsDisplayStore } from "../store/componentToRenderStore";
+import type { UserInfoApi } from "../types/types";
 
 export const Login = () => {
   const [loading, setloading] = useState(false);
-  const nameRef = useRef<HTMLInputElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
+  const setUser = useUserInfoStore((state) => state.setUser);
+  const setConversationDisplay = useComponentsDisplayStore(
+    (state) => state.setConversationDisplay
+  );
+  const setSignupDisplay = useComponentsDisplayStore(
+    (state) => state.setSignupDisplay
+  );
 
   const submit = async () => {
     setloading(true);
-    const name = nameRef.current?.value;
     const email = emailRef.current?.value;
-    if (!name || !email) return setloading(false);
+    if (!email) return setloading(false);
     try {
-      await axios.post("/auth/register", {
-        name,
+      const { data } = await axios.post<{ user: UserInfoApi }>("/auth/login", {
         email,
       });
-      navigate("/loading");
+
+      setUser(data.user);
+      setConversationDisplay(true);
+
     } catch (error) {
       console.error("Error while axios fetching", error);
     } finally {
@@ -30,7 +38,7 @@ export const Login = () => {
   return (
     <div>
       <motion.div
-        className="flex justify-center items-center min-h-screen bg-gradient-to-br from-blue-50 to-blue-200"
+        className="flex justify-center items-center min-h-[100dvh] bg-gradient-to-br from-blue-50 to-blue-200"
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
@@ -59,6 +67,9 @@ export const Login = () => {
             >
               {loading ? "Logging in..." : "Login to your account"}
             </button>
+            <div className="p-3 m-3 text-center text-gray-500 ">
+            Need an account? <button className="text-blue-500 underline" onClick={() => setSignupDisplay(true) }>Signup</button>
+          </div>
           </div>
         </div>
       </motion.div>

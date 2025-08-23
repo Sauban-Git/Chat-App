@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import axios from "../utils/axios";
+import type { AxiosError } from "axios";
 
 interface User {
   id: string;
@@ -36,9 +37,10 @@ export const useUsersListStore = create<UsersListStore>((set) => ({
   fetchUsers: async () => {
     set({ loading: true, error: null });
     try {
-      const response = await axios.get("/users/"); // Adjust the endpoint if needed
+      const response = await axios.get("/users/");
       set({ users: response.data.users, loading: false });
-    } catch (err: any) {
+    } catch (error) {
+        const err = error as AxiosError<{ error: string }>;
       set({
         error: err?.response?.data?.error || "Failed to fetch users",
         loading: false,

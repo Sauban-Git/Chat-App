@@ -35,7 +35,7 @@ export interface ConversationFromApi {
 export interface UserInfoApi {
   id: string;
   name: string;
-  phoneNumber: string;
+  email: string;
   createdAt: string;
   updatedAt: string;
 }

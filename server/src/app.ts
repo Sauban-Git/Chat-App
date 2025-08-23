@@ -13,7 +13,7 @@ export const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: "*",
+    origin: ["http://192.168.31.55:5173"],
     credentials: true,
   })
 );
