@@ -20,6 +20,8 @@ export const Messages = () => {
 
   // const user = useUserInfoStore((s) => s.user);
 
+  
+
   const goBack = () => {
     setConversationDisplay(true);
   };
@@ -46,6 +48,7 @@ export const Messages = () => {
     sendMessage( conversationId, newMessage ); // ✅ call socket emitter
     setNewMessage(""); // reset input
   };
+
 
   return (
     <div className="rounded-xl p-4 min-h-[100dvh]">

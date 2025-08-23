@@ -1,9 +1,23 @@
 
+import { useEffect } from "react";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 import { ConversationList } from "./ConversationList";
+import axios from "../utils/axios"
 
 export const Conversation = () => {
   const setUserInfoDisplay = useComponentsDisplayStore((state) => state.setUserInfoDisplay)
+
+  const updateMessageStatus = async() => {
+    try {
+      await axios.put("/message/deliver")
+    }catch(error) {
+      console.log("Error: ",error)
+    }
+  }
+
+  useEffect(() => {
+    updateMessageStatus()
+  }, [])
   
 
   return (

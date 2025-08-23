@@ -15,9 +15,10 @@ export const MessageList = ({
   const setMessageList = useMessageListStore((state) => state.setMessageList);
   const user = useUserInfoStore((state) => state.user);
 
-
   const typingStatus = usePresenceStore((state) => state.typingStatus);
-  const conversationId = useConversationIdStore((state) => state.conversationId);
+  const conversationId = useConversationIdStore(
+    (state) => state.conversationId
+  );
 
   // typingUsers is an object like { userId: true/false, ... }
   const typingUsers = typingStatus[conversationId] || {};
@@ -28,22 +29,35 @@ export const MessageList = ({
   );
 
   const getAllMessages = async () => {
-  if (!conversationId) return;  // exit early if no conversationId yet
+    if (!conversationId) return; // exit early if no conversationId yet
 
-  try {
-    const { data } = await axios.get<{ messages: MessageFromApi[] }>(
-      `/conversations/${conversationId}/messages`
-    );
-    setMessageList(data.messages);
-  } catch (error) {
-    console.log("Error: ", error);
+    try {
+      const { data } = await axios.get<{ messages: MessageFromApi[] }>(
+        `/conversations/${conversationId}/messages`
+      );
+      setMessageList(data.messages);
+    } catch (error) {
+      console.log("Error: ", error);
+    }
+  };
+
+  const updateMessageStatus = async() => {
+    try {
+      await axios.put("/message/read", {
+        conversationId
+      })
+    }catch(error) {
+      console.log("Error: ",error)
+    }
   }
-};
 
+  useEffect(() => {
+    updateMessageStatus();
+  }, [])
 
   useEffect(() => {
     getAllMessages();
-  }, [conversationId])
+  }, [conversationId]);
 
   useEffect(() => {
     if (lastMessageRef.current) {
