@@ -26,7 +26,31 @@ export function useWebSocket() {
     (state) => state.conversationId
   );
 
-  // Manage socket lifecycle based on user presence
+  // Update message list store for delivered/read status
+  const updateMessageStatus = (
+    conversationId: string,
+    messageIds: string[],
+    status: "delivered" | "read",
+    timestamp: string
+  ) => {
+    const date = new Date(timestamp); // convert string to Date
+
+    useMessageListStore.setState((prev) => {
+      const updatedMessages = prev.messageList.map((msg) => {
+        if (messageIds.includes(msg.id)) {
+          if (status === "delivered") {
+            return { ...msg, deliveredAt: date };
+          } else if (status === "read") {
+            return { ...msg, readAt: date };
+          }
+        }
+        return msg;
+      });
+
+      return { messageList: updatedMessages };
+    });
+  };
+
   useEffect(() => {
     if (user) {
       const socket = io(SOCKET_URL, {
@@ -83,6 +107,25 @@ export function useWebSocket() {
       socket.on("status:offline", ({ userId }) => {
         setOnlineStatus(userId, false);
         updateUserPresence(userId, false);
+      });
+
+      // ** New: handle delivered and read message events **
+      socket.on(
+        "message:delivered",
+        ({ conversationId, messageIds, deliveredAt }) => {
+          // messageIds is an array of IDs that were marked delivered
+          updateMessageStatus(
+            conversationId,
+            messageIds,
+            "delivered",
+            deliveredAt
+          );
+        }
+      );
+
+      socket.on("message:read", ({ conversationId, messageIds, readAt }) => {
+        // messageIds is an array of IDs that were marked read
+        updateMessageStatus(conversationId, messageIds, "read", readAt);
       });
 
       // Auto-disconnect on unmount or user logout

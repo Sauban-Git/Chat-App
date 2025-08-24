@@ -5,6 +5,7 @@ import { usePresenceStore } from "../store/userPresenceStore";
 import { useMessageListStore } from "../store/messagesListStore";
 import axios from "../utils/axios";
 import type { MessageFromApi } from "../types/types";
+import dayjs from "dayjs";
 
 export const MessageList = ({
   lastMessageRef,
@@ -41,19 +42,32 @@ export const MessageList = ({
     }
   };
 
-  const updateMessageStatus = async() => {
+  const updateMessageStatus = async () => {
     try {
       await axios.put("/message/read", {
-        conversationId
-      })
-    }catch(error) {
-      console.log("Error: ",error)
+        conversationId,
+      });
+    } catch (error) {
+      console.log("Error: ", error);
     }
-  }
+  };
+
+  const getStatusIcon = (status?: string) => {
+    switch (status) {
+      case "SENT":
+        return "/images/sent.svg";
+      case "DELIVERED":
+        return "/images/delivered.svg";
+      case "READ":
+        return "/images/read.svg";
+      default:
+        return null;
+    }
+  };
 
   useEffect(() => {
     updateMessageStatus();
-  }, [])
+  }, []);
 
   useEffect(() => {
     getAllMessages();
@@ -70,6 +84,15 @@ export const MessageList = ({
       {messages.map((msg, index) => {
         const isSender = msg.senderId !== user!.id; // corrected sender check
         const isLast = index === messages.length - 1;
+        let status: "SENT" | "DELIVERED" | "READ" = "SENT";
+        if (msg.readAt) {
+          status = "READ";
+        } else if (msg.deliveredAt) {
+          status = "DELIVERED";
+        } else {
+          status = "SENT";
+        }
+        const statusIcon = getStatusIcon(status);
         return isSender ? (
           <div
             key={msg.id}
@@ -91,6 +114,12 @@ export const MessageList = ({
             <div className="inline-block bg-neutral-500 rounded-2xl py-2 px-3 text-white">
               <div className="flex flex-col py-2">
                 <p className="text-sm">{msg.text}</p>
+                <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-gray-200 opacity-70">
+                  <span>{dayjs(msg.createdAt).format("h:mm A")}</span>
+                  {statusIcon && (
+                    <img src={statusIcon} alt={status} className="w-6" />
+                  )}
+                </div>
               </div>
             </div>
           </div>

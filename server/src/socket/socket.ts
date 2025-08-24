@@ -1,4 +1,3 @@
-// socket.ts
 import { Server, Socket } from "socket.io";
 import { RedisPubSub } from "../db/redis.js";
 import jwt from "jsonwebtoken";
@@ -12,7 +11,9 @@ type ChatEvents =
   | "typing:start"
   | "typing:stop"
   | "status:online"
-  | "status:offline";
+  | "status:offline"
+  | "message:delivered"
+  | "message:read";
 
 interface PubSubPayload {
   event: ChatEvents;
@@ -28,6 +29,8 @@ const eventChannels = {
   typingStop: "channel:typing:stop",
   statusOnline: "channel:status:online",
   statusOffline: "channel:status:offline",
+  messageDelivered: "channel:message:delivered",
+  messageRead: "channel:message:read",
 };
 
 let isSubscribed = false;
@@ -39,18 +42,16 @@ function setupRedisSubscriptions(io: Server) {
     RedisPubSub.subscribe(channel, (data: PubSubPayload) => {
       const { event, conversationId, payload } = data;
 
-      // For online/offline, broadcast globally
       if (event === "status:online" || event === "status:offline") {
-        io.emit(event, payload); // ✅ Broadcast to all clients
-      }
-
-      // For messages and typing, emit to the conversation room
-      else if (conversationId) {
+        io.emit(event, payload); // broadcast globally
+      } else if (event === "message:delivered" || event === "message:read") {
+        // Broadcast message status update to conversation room
+        if (conversationId) {
+          io.to(conversationId).emit(event, payload);
+        }
+      } else if (conversationId) {
         io.to(conversationId).emit(event, payload);
-      }
-
-      // Fallback
-      else {
+      } else {
         io.emit(event, payload);
       }
     });
@@ -81,7 +82,7 @@ export const setupSocket = (io: Server) => {
       }
 
       const parsedCookies = cookie.parse(cookieHeader);
-      const token = parsedCookies.token; // Make sure your cookie is actually named 'token'
+      const token = parsedCookies.token;
 
       if (!token) {
         return next(new Error("Token not found in cookies"));
@@ -106,24 +107,76 @@ export const setupSocket = (io: Server) => {
 
     if (!userId) return;
 
-    // Join user's personal room
+    // Join user personal room
     socket.join(userId);
 
-    // Auto-join all conversations the user is in
+    // Auto join all conversations user is part of
     const userConversations = await getUserConversations(userId);
     userConversations.forEach((conversationId) => {
       socket.join(conversationId);
       console.log(`📥 ${userId} joined conversation: ${conversationId}`);
     });
 
-    // Optional manual join
-    socket.on("join", ({ conversationId }) => {
+    // Mark all undelivered messages *to* this user as delivered
+    try {
+      const updated = await prisma.message.updateMany({
+        where: {
+          conversationId: { in: userConversations },
+          senderId: { not: userId }, // messages NOT sent by user
+          deliveredAt: null,
+        },
+        data: {
+          deliveredAt: new Date(),
+        },
+      });
+
+      if (updated.count > 0) {
+        // Broadcast delivered event per conversation, optionally batch by conversation
+        // For simplicity, emit a general event
+        userConversations.forEach((conversationId) => {
+          RedisPubSub.publish(eventChannels.messageDelivered, {
+            event: "message:delivered",
+            conversationId,
+            payload: { userId, conversationId }, // Add more info if needed
+          });
+        });
+      }
+    } catch (error) {
+      console.error("Error updating delivered messages:", error);
+    }
+
+    // Listen for manual join to conversation room (e.g. when user opens a conversation)
+    socket.on("join", async ({ conversationId }) => {
       if (conversationId) {
         socket.join(conversationId);
         console.log(`➡️ ${userId} manually joined: ${conversationId}`);
+
+        // Mark all unread messages in that conversation as read
+        try {
+          const updatedRead = await prisma.message.updateMany({
+            where: {
+              conversationId,
+              senderId: { not: userId },
+              readAt: null,
+            },
+            data: {
+              readAt: new Date(),
+            },
+          });
+
+          if (updatedRead.count > 0) {
+            RedisPubSub.publish(eventChannels.messageRead, {
+              event: "message:read",
+              conversationId,
+              payload: { userId, conversationId }, // Add more info if needed
+            });
+          }
+        } catch (error) {
+          console.error("Error updating read messages:", error);
+        }
       }
 
-      // Re-join user room if needed
+      // Ensure user room is joined
       socket.join(userId);
     });
 
@@ -134,7 +187,7 @@ export const setupSocket = (io: Server) => {
         conversationId: data.conversationId,
         payload: {
           ...data,
-          senderId: userId, // Always trust server
+          senderId: userId,
         },
       });
     });
@@ -147,7 +200,7 @@ export const setupSocket = (io: Server) => {
       });
     });
 
-    // Typing indicators
+    // Typing events
     socket.on("typing:start", (data) => {
       RedisPubSub.publish(eventChannels.typingStart, {
         event: "typing:start",
@@ -164,7 +217,7 @@ export const setupSocket = (io: Server) => {
       });
     });
 
-    // Status indicators (do not trust client userId)
+    // Status online/offline events from client (do not trust userId from client)
     socket.on("status:online", () => {
       RedisPubSub.publish(eventChannels.statusOnline, {
         event: "status:online",
@@ -181,7 +234,6 @@ export const setupSocket = (io: Server) => {
       });
     });
 
-    // On disconnect, publish offline status
     socket.on("disconnect", () => {
       console.log(`🔌 Disconnected: ${socket.id} | User: ${userId}`);
 
