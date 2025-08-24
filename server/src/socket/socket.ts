@@ -4,6 +4,7 @@ import { RedisPubSub } from "../db/redis.js";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "../config/jwt.js";
 import { prisma } from "../db/prisma.js";
+import cookie from "cookie";
 
 type ChatEvents =
   | "message:new"
@@ -67,17 +68,27 @@ export const setupSocket = (io: Server) => {
 
   io.use((socket, next) => {
     try {
-      const token = socket.handshake.auth?.token || "";
-      const raw = token.startsWith("Bearer ") ? token.slice(7) : token;
+      const cookieHeader = socket.handshake.headers.cookie;
+      if (!cookieHeader) {
+        return next(new Error("No cookies found"));
+      }
 
-      const decoded = jwt.verify(raw, JWT_SECRET);
+      const parsedCookies = cookie.parse(cookieHeader);
+      const token = parsedCookies.token; // Make sure your cookie is actually named 'token'
+
+      if (!token) {
+        return next(new Error("Token not found in cookies"));
+      }
+
+      const decoded = jwt.verify(token, JWT_SECRET);
       if (typeof decoded !== "object" || !decoded.userId) {
         return next(new Error("Invalid token"));
       }
 
       socket.data.userId = decoded.userId;
-      return next();
+      next();
     } catch (err) {
+      console.error("Socket auth error:", err);
       return next(new Error("Authentication failed"));
     }
   });
