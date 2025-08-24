@@ -19,25 +19,28 @@ export const ConversationList = () => {
     (state) => state.setErrorContent
   );
   const setUsers = useUsersListStore((s) => s.setUsers);
-  const setConversationId = useConversationIdStore((s) => s.setConversationId)
+  const setConversationId = useConversationIdStore((s) => s.setConversationId);
 
   const getUsers = async () => {
     const { data } = await axios.get<{ users: User[] }>("/users/");
     setUsers(data.users);
   };
 
-  const openMessage = async(reciepentId: string) => {
+  const openMessage = async (reciepentId: string) => {
     try {
-      const {data} = await axios.post<{conversation: Conversation}>("/conversations/start/", {
-        to: reciepentId
-      })
-      setConversationId(data.conversation.id)
-      setMessageDisplay(true)
-    }catch (error) {
-      console.log(error)
-      setErrorContent("Error while initiating conversation", true)
+      const { data } = await axios.post<{ conversation: Conversation }>(
+        "/conversations/start/",
+        {
+          to: reciepentId,
+        }
+      );
+      setConversationId(data.conversation.id);
+      setMessageDisplay(true);
+    } catch (error) {
+      console.log(error);
+      setErrorContent("Error while initiating conversation", true);
     }
-  }
+  };
 
   if (error) {
     setErrorContent(error, true);
@@ -64,10 +67,12 @@ export const ConversationList = () => {
             />
           </div>
           <div className="flex flex-col py-2">
-            <p className="text-md font-semibold">{user.name}</p>
+            <p className="text-md font-semibold">{user.name ?? ""}</p>
             <p className="text-xs">
-              {user.conversation
-                ? `${user.conversation.lastMessage?.sender.name}: ${user.conversation.lastMessage?.text}`
+              {user.conversation && user.conversation.lastMessage
+                ? `${
+                    user.conversation.lastMessage.sender?.name ?? ""
+                  }: ${user.conversation.lastMessage.text}`
                 : "No message yet"}
             </p>
           </div>

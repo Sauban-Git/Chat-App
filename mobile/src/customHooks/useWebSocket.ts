@@ -6,6 +6,7 @@ import { useUsersListStore } from "../store/conversationListStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useMessageListStore } from "../store/messagesListStore";
+import type { MessageFromApi } from "../types/types";
 
 const SOCKET_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
 
@@ -24,7 +25,6 @@ export function useWebSocket() {
   const currentConversationId = useConversationIdStore(
     (state) => state.conversationId
   );
-  const messageList = useMessageListStore((state) => state.messageList);
 
   // Manage socket lifecycle based on user presence
   useEffect(() => {
@@ -46,11 +46,17 @@ export function useWebSocket() {
 
       // Incoming events
       socket.on("message:new", (message) => {
-        if (message.conversationId === currentConversationId) {
-          useMessageListStore.setState((prev) => ({
+        useMessageListStore.setState((prev) => {
+          const alreadyExists = prev.messageList.some(
+            (m) => m.id === message.id
+          );
+          if (alreadyExists) return prev;
+
+          return {
             messageList: [...prev.messageList, message],
-          }));
-        }
+          };
+        });
+
         updateLastMessage(message.conversationId, message);
       });
 
@@ -96,13 +102,12 @@ export function useWebSocket() {
   }, [user, currentConversationId]);
 
   // Emit new messages when messageList updates
-  useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket || !socket.connected) return;
-
-    const lastMessage = messageList[messageList.length - 1];
-    if (!lastMessage) return;
-
-    socket.emit("message:new", lastMessage);
-  }, [messageList]);
+  // useWebSocket.ts (new code at the bottom of the hook)
+  return {
+    emitMessage: (message: MessageFromApi) => {
+      if (socketRef.current?.connected) {
+        socketRef.current.emit("message:new", message);
+      }
+    },
+  };
 }
