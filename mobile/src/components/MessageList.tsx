@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { useEffect } from "react";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { useUserInfoStore } from "../store/userInfoStore";
@@ -132,12 +133,31 @@ export const MessageList = ({
 
       {/* Typing indicator div, rendered only if someone else is typing */}
       {isSomeoneTyping && (
-        <div className="flex justify-start">
-          <div className="inline-block bg-neutral-200 rounded-2xl py-2 px-3 text-black italic">
-            <p className="text-sm">typing...</p>
-          </div>
-        </div>
-      )}
+  <div className="flex justify-start">
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 5 }}
+      transition={{ duration: 0.3 }}
+      className="inline-block bg-neutral-200 rounded-2xl py-2 px-3 text-black italic"
+    >
+      <div className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <motion.span
+            key={i}
+            className="w-2 h-2 bg-black rounded-full"
+            animate={{ y: [0, -3, 0] }}
+            transition={{
+              duration: 0.6,
+              repeat: Infinity,
+              delay: i * 0.2, // stagger dots
+            }}
+          />
+        ))}
+      </div>
+    </motion.div>
+  </div>
+)}
     </div>
   );
 };
