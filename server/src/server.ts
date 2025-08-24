@@ -1,17 +1,15 @@
-import { app } from "./app.js"
-import { createServer } from "node:http"
-import { setUpSocket } from "./socket/index.js"
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { app } from './app.js';
+import { setupSocket } from './socket/socket.js';
 
-const port = Number(process.env.PORT) || 3000
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: '*' }
+});
 
-const server = createServer(app)
+setupSocket(io);
 
-setUpSocket(server)
-
-server.listen(port, '0.0.0.0', () => {
-    console.log(`App running on port ${port}`)
-})
-
-server.on("error", (err) => {
-  console.error("Server error:", err);
+httpServer.listen(3000, () => {
+  console.log('Server is running on port 3000');
 });

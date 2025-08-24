@@ -1,11 +1,10 @@
 import "./App.css";
+import { useWebSocket } from "./customHooks/useWebSocket";
 import { Home } from "./pages/Home";
 
-
 function App() {
-  return (
-    <Home/>
-  );
+  useWebSocket();
+  return <Home />;
 }
 
 export default App;
