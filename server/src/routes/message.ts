@@ -9,7 +9,7 @@ router.use(userAuth);
 
 router.post("/", async (req: Request, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
-  const { conversationId, text } = req.body;
+  const { conversationId, text, deliveredAt, readAt } = req.body;
   if (!conversationId || !text)
     return res.status(400).json({
       error: "Please send text and conversationId",
@@ -20,6 +20,8 @@ router.post("/", async (req: Request, res: Response) => {
         conversationId,
         senderId: userId,
         text,
+        deliveredAt: deliveredAt ?? null,
+        readAt: readAt ?? null,
       },
     });
     return res.status(200).json({

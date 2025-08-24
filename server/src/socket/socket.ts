@@ -107,6 +107,9 @@ export const setupSocket = (io: Server) => {
 
     if (!userId) return;
 
+    // Track the active conversation for this socket connection
+    let activeConversationId: string | null = null;
+
     // Join user personal room
     socket.join(userId);
 
@@ -117,7 +120,7 @@ export const setupSocket = (io: Server) => {
       console.log(`📥 ${userId} joined conversation: ${conversationId}`);
     });
 
-    // Mark all undelivered messages *to* this user as delivered
+    // Mark all undelivered messages *to* this user as delivered (existing logic)
     try {
       const updated = await prisma.message.updateMany({
         where: {
@@ -131,13 +134,15 @@ export const setupSocket = (io: Server) => {
       });
 
       if (updated.count > 0) {
-        // Broadcast delivered event per conversation, optionally batch by conversation
-        // For simplicity, emit a general event
         userConversations.forEach((conversationId) => {
           RedisPubSub.publish(eventChannels.messageDelivered, {
             event: "message:delivered",
             conversationId,
-            payload: { userId, conversationId }, // Add more info if needed
+            payload: {
+              userId,
+              conversationId,
+              deliveredAt: new Date().toISOString(),
+            },
           });
         });
       }
@@ -148,6 +153,8 @@ export const setupSocket = (io: Server) => {
     // Listen for manual join to conversation room (e.g. when user opens a conversation)
     socket.on("join", async ({ conversationId }) => {
       if (conversationId) {
+        activeConversationId = conversationId; // Track active conversation
+
         socket.join(conversationId);
         console.log(`➡️ ${userId} manually joined: ${conversationId}`);
 
@@ -168,7 +175,11 @@ export const setupSocket = (io: Server) => {
             RedisPubSub.publish(eventChannels.messageRead, {
               event: "message:read",
               conversationId,
-              payload: { userId, conversationId }, // Add more info if needed
+              payload: {
+                userId,
+                conversationId,
+                readAt: new Date().toISOString(),
+              },
             });
           }
         } catch (error) {
@@ -180,8 +191,17 @@ export const setupSocket = (io: Server) => {
       socket.join(userId);
     });
 
+    // Optional: handle leave event
+    socket.on("leave", ({ conversationId }) => {
+      if (conversationId && activeConversationId === conversationId) {
+        activeConversationId = null;
+        socket.leave(conversationId);
+        console.log(`⬅️ ${userId} left conversation: ${conversationId}`);
+      }
+    });
+
     // Message events
-    socket.on("message:new", (data) => {
+    socket.on("message:new", async (data) => {
       RedisPubSub.publish(eventChannels.message, {
         event: "message:new",
         conversationId: data.conversationId,
@@ -190,6 +210,64 @@ export const setupSocket = (io: Server) => {
           senderId: userId,
         },
       });
+
+      socket.on("message:read", async ({ conversationId }) => {
+        try {
+          const updated = await prisma.message.updateMany({
+            where: {
+              conversationId,
+              senderId: { not: userId },
+              readAt: null,
+            },
+            data: {
+              readAt: new Date(),
+            },
+          });
+
+          if (updated.count > 0) {
+            RedisPubSub.publish(eventChannels.messageRead, {
+              event: "message:read",
+              conversationId,
+              payload: {
+                userId,
+                conversationId,
+                readAt: new Date().toISOString(),
+              },
+            });
+          }
+        } catch (error) {
+          console.error("Error handling message:read emit:", error);
+        }
+      });
+
+      // Mark messages as read if message belongs to active conversation and sender is not user
+      if (
+        activeConversationId === data.conversationId &&
+        data.senderId !== userId
+      ) {
+        try {
+          await prisma.message.updateMany({
+            where: {
+              conversationId: data.conversationId,
+              senderId: { not: userId },
+              readAt: null,
+            },
+            data: { readAt: new Date() },
+          });
+
+          RedisPubSub.publish(eventChannels.messageRead, {
+            event: "message:read",
+            conversationId: data.conversationId,
+            payload: {
+              userId,
+              conversationId: data.conversationId,
+              readAt: new Date().toISOString(),
+            },
+          });
+        } catch (err) {
+          console.error("Error marking messages as read on message:new:", err);
+        }
+      }
     });
 
     socket.on("conversation:new", (data) => {

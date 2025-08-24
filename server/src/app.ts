@@ -14,7 +14,7 @@ export const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: ["http://192.168.31.55:5173"],
+    origin: process.env.CLIENT_URL,
     credentials: true,
   })
 );

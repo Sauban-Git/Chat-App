@@ -20,6 +20,10 @@ export const MessageList = ({
   const conversationId = useConversationIdStore(
     (state) => state.conversationId
   );
+  const recipientId = useConversationIdStore((s) => s.recipientId)
+  const isOnline = usePresenceStore((state) =>
+    recipientId ? state.onlineStatus[recipientId] : false
+  );
 
   // typingUsers is an object like { userId: true/false, ... }
   const typingUsers = typingStatus[conversationId] || {};
@@ -67,7 +71,7 @@ export const MessageList = ({
 
   useEffect(() => {
     updateMessageStatus();
-  }, []);
+  }, [isOnline]);
 
   useEffect(() => {
     getAllMessages();

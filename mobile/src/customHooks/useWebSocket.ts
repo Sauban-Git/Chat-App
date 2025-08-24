@@ -6,7 +6,7 @@ import { useUsersListStore } from "../store/conversationListStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useMessageListStore } from "../store/messagesListStore";
-import type { MessageFromApi } from "../types/types";
+import type { MessageFromApi, MessageWithSender } from "../types/types";
 
 const SOCKET_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
 
@@ -22,28 +22,34 @@ export function useWebSocket() {
   const updateUserPresence = useUsersListStore(
     (state) => state.updateUserPresence
   );
+
   const currentConversationId = useConversationIdStore(
     (state) => state.conversationId
   );
 
-  // Update message list store for delivered/read status
-  const updateMessageStatus = (
+  // Used to track if user switched conversation
+  const previousConversationIdRef = useRef<string | null>(null);
+
+  const updateAllUnmarkedMessages = (
     conversationId: string,
-    messageIds: string[],
-    status: "delivered" | "read",
-    timestamp: string
+    timestamp: string,
+    status: "delivered" | "read"
   ) => {
-    const date = new Date(timestamp); // convert string to Date
+    const isoTimestamp = new Date(timestamp).toISOString();
 
     useMessageListStore.setState((prev) => {
       const updatedMessages = prev.messageList.map((msg) => {
-        if (messageIds.includes(msg.id)) {
-          if (status === "delivered") {
-            return { ...msg, deliveredAt: date };
-          } else if (status === "read") {
-            return { ...msg, readAt: date };
-          }
+        const isFromOtherUser = msg.senderId !== user?.id;
+        const inConversation = msg.conversationId === conversationId;
+
+        if (!inConversation || !isFromOtherUser) return msg;
+
+        if (status === "delivered" && !msg.deliveredAt) {
+          return { ...msg, deliveredAt: isoTimestamp };
+        } else if (status === "read" && !msg.readAt) {
+          return { ...msg, readAt: isoTimestamp };
         }
+
         return msg;
       });
 
@@ -52,100 +58,117 @@ export function useWebSocket() {
   };
 
   useEffect(() => {
-    if (user) {
-      const socket = io(SOCKET_URL, {
-        withCredentials: true,
+    if (!user) return;
+
+    const socket = io(SOCKET_URL, {
+      withCredentials: true,
+    });
+
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      console.log("✅ Socket connected:", socket.id);
+      socket.emit("status:online");
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log("❌ Socket disconnected:", reason);
+    });
+
+    // Incoming messages
+    socket.on("message:new", (message: MessageWithSender) => {
+      const isFromOtherUser = message.senderId !== user.id;
+      const isInCurrentConversation =
+        message.conversationId === currentConversationId;
+
+      if (isFromOtherUser && isInCurrentConversation) {
+        // Reuse the same event
+        socket.emit("message:read", { conversationId: message.conversationId });
+      }
+
+      useMessageListStore.setState((prev) => {
+        const alreadyExists = prev.messageList.some((m) => m.id === message.id);
+        if (alreadyExists) return prev;
+
+        return {
+          messageList: [...prev.messageList, message],
+        };
       });
 
-      socketRef.current = socket;
+      updateLastMessage(message.conversationId, message);
+    });
 
-      socket.on("connect", () => {
-        console.log("✅ Socket connected:", socket.id);
-        socket.emit("status:online");
-      });
+    socket.on("conversation:new", (conversation) => {
+      if (conversation.lastMessage) {
+        updateLastMessage(conversation.id, conversation.lastMessage);
+      }
+    });
 
-      socket.on("disconnect", (reason) => {
-        console.log("❌ Socket disconnected:", reason);
-      });
+    socket.on("typing:start", ({ conversationId, userId }) => {
+      setTypingStatus(conversationId, userId, true);
+    });
 
-      // Incoming events
-      socket.on("message:new", (message) => {
-        useMessageListStore.setState((prev) => {
-          const alreadyExists = prev.messageList.some(
-            (m) => m.id === message.id
-          );
-          if (alreadyExists) return prev;
+    socket.on("typing:stop", ({ conversationId, userId }) => {
+      setTypingStatus(conversationId, userId, false);
+    });
 
-          return {
-            messageList: [...prev.messageList, message],
-          };
-        });
+    socket.on("status:online", ({ userId }) => {
+      console.log("Received status:online for", userId);
+      setOnlineStatus(userId, true);
+      updateUserPresence(userId, true);
+    });
 
-        updateLastMessage(message.conversationId, message);
-      });
+    socket.on("status:offline", ({ userId }) => {
+      setOnlineStatus(userId, false);
+      updateUserPresence(userId, false);
+    });
 
-      socket.on("conversation:new", (conversation) => {
-        if (conversation.lastMessage) {
-          updateLastMessage(conversation.id, conversation.lastMessage);
-        }
-      });
+    socket.on("message:delivered", ({ conversationId, deliveredAt }) => {
+      updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
+    });
 
-      socket.on("typing:start", ({ conversationId, userId }) => {
-        setTypingStatus(conversationId, userId, true);
-      });
+    socket.on("message:read", ({ conversationId, readAt }) => {
+      updateAllUnmarkedMessages(conversationId, readAt, "read");
+    });
 
-      socket.on("typing:stop", ({ conversationId, userId }) => {
-        setTypingStatus(conversationId, userId, false);
-      });
+    // Graceful disconnect
+    const handleBeforeUnload = () => {
+      socket.emit("status:offline", { userId: user.id });
+    };
 
-      socket.on("status:online", ({ userId }) => {
-        console.log("Received status:online for", userId);
-        setOnlineStatus(userId, true);
-        updateUserPresence(userId, true);
-      });
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
-      socket.on("status:offline", ({ userId }) => {
-        setOnlineStatus(userId, false);
-        updateUserPresence(userId, false);
-      });
+    return () => {
+      socket.emit("status:offline", { userId: user.id });
+      socket.disconnect();
+      socketRef.current = null;
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      console.log("🛑 Socket disconnected due to unmount or logout");
+    };
+  }, [user]);
 
-      // ** New: handle delivered and read message events **
-      socket.on(
-        "message:delivered",
-        ({ conversationId, messageIds, deliveredAt }) => {
-          // messageIds is an array of IDs that were marked delivered
-          updateMessageStatus(
-            conversationId,
-            messageIds,
-            "delivered",
-            deliveredAt
-          );
-        }
-      );
+  // JOIN/LEAVE conversation logic
+  useEffect(() => {
+    if (!socketRef.current || !socketRef.current.connected || !user) return;
 
-      socket.on("message:read", ({ conversationId, messageIds, readAt }) => {
-        // messageIds is an array of IDs that were marked read
-        updateMessageStatus(conversationId, messageIds, "read", readAt);
-      });
+    const socket = socketRef.current;
+    const prevId = previousConversationIdRef.current;
+    const currId = currentConversationId;
 
-      // Auto-disconnect on unmount or user logout
-      const handleBeforeUnload = () => {
-        socket.emit("status:offline", { userId: user.id });
-      };
-
-      window.addEventListener("beforeunload", handleBeforeUnload);
-
-      return () => {
-        socket.emit("status:offline", { userId: user.id });
-        socket.disconnect();
-        socketRef.current = null;
-        window.removeEventListener("beforeunload", handleBeforeUnload);
-        console.log("🛑 Socket disconnected due to unmount or logout");
-      };
+    if (prevId && prevId !== currId) {
+      socket.emit("leave", { conversationId: prevId });
+      console.log(`➡️ Left previous conversation: ${prevId}`);
     }
-  }, [user, currentConversationId]);
 
-  // ---- EMIT HANDLERS ----
+    if (currId && currId !== prevId) {
+      socket.emit("join", { conversationId: currId });
+      console.log(`⬅️ Joined new conversation: ${currId}`);
+    }
+
+    previousConversationIdRef.current = currId;
+  }, [currentConversationId]);
+
+  // ---- Emit Handlers ----
 
   const emitMessage = (message: MessageFromApi) => {
     if (socketRef.current?.connected) {
@@ -169,6 +192,6 @@ export function useWebSocket() {
 
   return {
     emitMessage,
-    emitTyping, // 👈 expose typing emitter
+    emitTyping,
   };
 }

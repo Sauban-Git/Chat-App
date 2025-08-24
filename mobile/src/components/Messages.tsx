@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MessageList } from "./MessageList";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
@@ -35,12 +35,22 @@ export const Messages = () => {
     if (!newMessage.trim()) return;
 
     try {
+      let messagePayload;
+      if (isOnline) {
+        messagePayload = {
+          conversationId: conversationId,
+          text: newMessage,
+          readAt: new Date().toISOString(),
+        };
+      } else {
+        messagePayload = {
+          conversationId: conversationId,
+          text: newMessage,
+        };
+      }
       const { data } = await axios.post<{ message: MessageFromApi }>(
         "/message/",
-        {
-          conversationId,
-          text: newMessage,
-        }
+        messagePayload
       );
 
       emitMessage(data.message);
@@ -50,6 +60,7 @@ export const Messages = () => {
       console.error("Error sending message:", error);
     }
   };
+  useEffect(() => {}, [emitMessage, isOnline]);
 
   return (
     <div className="rounded-xl p-4 min-h-[100dvh]">
@@ -116,11 +127,11 @@ export const Messages = () => {
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             type="text"
             placeholder="Type message"
-            className="p-3 bg-neutral-200 rounded-xl "
+            className="p-3 bg-neutral-200 rounded-xl sm:w-full"
           />
           <button onClick={handleSend}>
             <img
-              className="h-12 w-12 bg-neutral-500 rounded-2xl p-2"
+              className="h-12 w-12 bg-neutral-500 rounded-2xl p-2 mx-2"
               src="/images/send.svg"
             />
           </button>

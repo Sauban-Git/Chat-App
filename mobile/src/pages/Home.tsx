@@ -5,9 +5,10 @@ import { Messages } from "../components/Messages";
 import { Signup } from "../components/SIgnup";
 import { UserInfo } from "../components/UserInfo";
 import { useComponentsDisplayStore } from "../store/componentToRenderStore";
-import { validateSession } from "../utils/auth";
 import { useUserInfoStore } from "../store/userInfoStore";
 import { LoadingScreen } from "../components/LoadingScreen";
+import axios from "../utils/axios"
+import type { UserInfoApi } from "../types/types";
 
 export const Home = () => {
   const {
@@ -20,30 +21,25 @@ export const Home = () => {
     setConversationDisplay,
   } = useComponentsDisplayStore();
   const [loading, setLoading] = useState(false);
-  const user = useUserInfoStore((state) => state.user);
+  const {setUser, user} = useUserInfoStore();
 
   // 🔁 Control navigation based on user state
   useEffect(() => {
     const init = async () => {
-      setLoading(true);
-      const isValid = await validateSession();
-      if (!isValid) {
-        setSignupDisplay(true);
+      setLoading(true)
+      try{
+        const {data}  = await axios.get<{user: UserInfoApi}>("/auth/info")
+        setUser(data.user)
         setLoading(false)
-      } else {
-        // Set default component if needed
-        if (
-          !conversationDisplay &&
-          !messageDisplay &&
-          !loginDisplay &&
-          !userInfoDisplay
-        ) {
-          setConversationDisplay(true);
-        }
+        setConversationDisplay(true)
+      }catch {
+        console.log("User not logged in")
+        setLoading(false)
+        setSignupDisplay(true)
+      }finally {
+        setLoading(false)
       }
-      setLoading(false);
-    };
-
+    }
     init();
   }, []);
 
@@ -55,5 +51,5 @@ export const Home = () => {
   if (loginDisplay) return <Login />;
   if (userInfoDisplay) return <UserInfo />;
 
-  return <div>No screen selected</div>;
+  return <Signup/>;
 };

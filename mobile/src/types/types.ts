@@ -1,17 +1,17 @@
 export interface MessageFromApi {
   id: string;
-  createdAt: Date;
+  createdAt: string;
   conversationId: string;
   senderId: string;
   text: string;
-  deliveredAt: Date | null;
-  readAt: Date | null;
+  deliveredAt: string | null;
+  readAt: string | null;
 }
 
 export interface MessageWithSender extends MessageFromApi {
   sender: {
     id: string;
-    name: string | null;
+    name: string;
     email: string;
   };
 }
