@@ -20,14 +20,6 @@ type ExtendedSocket = Socket & { userId?: string; clientId?: string };
 
 const clientSubscriptions = new Map<string, Set<string>>(); // clientId -> conversationIds
 
-// Debounce broadcasting user online status to avoid spamming on rapid reconnects
-const broadcastTimers = new Map<string, NodeJS.Timeout>();
-
-function broadcastOnlineStatus(io: SocketIOServer, userId: string) {
-  io.emit("status:online", { userId });
-  console.log(`Broadcasted status:online for user ${userId}`);
-}
-
 export async function setupSocket(server: HttpServer) {
   const io = new SocketIOServer(server, {
     cors: {
@@ -35,7 +27,10 @@ export async function setupSocket(server: HttpServer) {
       methods: ["GET", "POST"],
       credentials: true,
     },
+    pingTimeout: 10000,
+    pingInterval: 5000,
   });
+
   console.log(
     `Socket.IO server initialized with CORS origin: ${process.env.CLIENT_URL}`
   );
@@ -69,11 +64,18 @@ export async function setupSocket(server: HttpServer) {
 
   io.on("connection", async (socket: ExtendedSocket) => {
     const userId = socket.data.userId!;
-    const clientId = socket.id; // socket.io id
-    socket.data.userId = userId;
+    const clientId = socket.id;
     socket.data.clientId = clientId;
 
     console.log(`Socket connected: userId=${userId}, clientId=${clientId}`);
+
+    // Disconnect other sockets for the same user to enforce one connection
+    for (const [id, s] of io.sockets.sockets) {
+      if (s.data.userId === userId && id !== clientId) {
+        console.log(`Disconnecting existing socket ${id} for user ${userId}`);
+        s.disconnect(true);
+      }
+    }
 
     // Mark user client online in Redis
     await addUserOnlineClient(userId, clientId);
@@ -82,10 +84,11 @@ export async function setupSocket(server: HttpServer) {
     const onlineUsers = await getAllOnlineUsers();
     socket.emit("status:online:all", { users: onlineUsers });
 
-    // Broadcast to all others that this user is online (debounced)
-    broadcastOnlineStatus(io, userId);
+    // Broadcast user online immediately
+    io.emit("status:online", { userId });
+    console.log(`Broadcasted status:online for user ${userId}`);
 
-    // Auto-subscribe client to all conversations where user is user1 or user2
+    // Auto-subscribe client to all conversations where user is participant
     const userConversations = await prisma.conversation.findMany({
       where: {
         OR: [{ user1Id: userId }, { user2Id: userId }],
@@ -146,7 +149,6 @@ export async function setupSocket(server: HttpServer) {
       });
     });
 
-    // Listen for sending new messages
     socket.on("message:new", async (payload) => {
       const { conversationId, text } = payload;
       if (!conversationId || !text) return;
@@ -193,15 +195,15 @@ export async function setupSocket(server: HttpServer) {
       }
     });
 
-    // Client disconnect handler
     socket.on("disconnect", async () => {
-      console.log(
-        `Socket disconnected: userId=${userId}, clientId=${clientId}`
-      );
-      await removeUserOnlineClient(userId, clientId);
+      console.log(`Socket disconnected: userId=${userId}, clientId=${clientId}`);
 
-      // Check if user still online on other clients
+      await removeUserOnlineClient(userId, clientId);
+      console.log(`Removed clientId ${clientId} from user ${userId} online clients.`);
+
       const remaining = await getUserOnlineClientCount(userId);
+      console.log(`Remaining online clients for user ${userId}: ${remaining}`);
+
       if (remaining === 0) {
         io.emit("status:offline", { userId });
         console.log(`User ${userId} is OFFLINE`);
