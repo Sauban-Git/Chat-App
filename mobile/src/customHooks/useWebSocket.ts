@@ -37,7 +37,7 @@ export function useWebSocket() {
 
       socket.on("connect", () => {
         console.log("✅ Socket connected:", socket.id);
-        socket.emit("status:online", { userId: user.id });
+        socket.emit("status:online");
       });
 
       socket.on("disconnect", (reason) => {
@@ -75,6 +75,7 @@ export function useWebSocket() {
       });
 
       socket.on("status:online", ({ userId }) => {
+        console.log("Received status:online for", userId);
         setOnlineStatus(userId, true);
         updateUserPresence(userId, true);
       });
@@ -101,13 +102,30 @@ export function useWebSocket() {
     }
   }, [user, currentConversationId]);
 
-  // Emit new messages when messageList updates
-  // useWebSocket.ts (new code at the bottom of the hook)
+  // ---- EMIT HANDLERS ----
+
+  const emitMessage = (message: MessageFromApi) => {
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("message:new", message);
+    }
+  };
+
+  const emitTyping = (
+    type: "start" | "stop",
+    conversationId: string,
+    userId: string
+  ) => {
+    if (!socketRef.current?.connected) return;
+
+    if (type === "start") {
+      socketRef.current.emit("typing:start", { conversationId, userId });
+    } else {
+      socketRef.current.emit("typing:stop", { conversationId, userId });
+    }
+  };
+
   return {
-    emitMessage: (message: MessageFromApi) => {
-      if (socketRef.current?.connected) {
-        socketRef.current.emit("message:new", message);
-      }
-    },
+    emitMessage,
+    emitTyping, // 👈 expose typing emitter
   };
 }

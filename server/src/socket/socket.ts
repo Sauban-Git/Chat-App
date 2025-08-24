@@ -37,13 +37,20 @@ function setupRedisSubscriptions(io: Server) {
 
   Object.values(eventChannels).forEach((channel) => {
     RedisPubSub.subscribe(channel, (data: PubSubPayload) => {
-      const { event, conversationId, userId, payload } = data;
+      const { event, conversationId, payload } = data;
 
-      if (conversationId) {
+      // For online/offline, broadcast globally
+      if (event === "status:online" || event === "status:offline") {
+        io.emit(event, payload); // ✅ Broadcast to all clients
+      }
+
+      // For messages and typing, emit to the conversation room
+      else if (conversationId) {
         io.to(conversationId).emit(event, payload);
-      } else if (userId) {
-        io.to(userId).emit(event, payload);
-      } else {
+      }
+
+      // Fallback
+      else {
         io.emit(event, payload);
       }
     });

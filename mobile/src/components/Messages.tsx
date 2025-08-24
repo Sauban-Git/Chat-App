@@ -6,6 +6,8 @@ import { useConversationIdStore } from "../store/conversationIdStore";
 import axios from "../utils/axios";
 import type { MessageFromApi } from "../types/types";
 import { useWebSocket } from "../customHooks/useWebSocket";
+import { usePresenceStore } from "../store/userPresenceStore";
+import { useUserInfoStore } from "../store/userInfoStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
 
 export const Messages = () => {
@@ -14,32 +16,20 @@ export const Messages = () => {
     (state) => state.setConversationDisplay
   );
   const [newMessage, setNewMessage] = useState("");
-  const conversationId = useConversationIdStore(
-    (state) => state.conversationId
-  );
+  const { conversationId, conversationName, recipientId } =
+    useConversationIdStore();
 
-  // const user = useUserInfoStore((s) => s.user);
+  const user = useUserInfoStore((s) => s.user);
 
   const goBack = () => {
     setConversationDisplay(true);
   };
 
-  // const sendMessage = async(conversationId: string, text: string) => {
-  //   try {
+  const { emitMessage, emitTyping } = useWebSocket();
 
-  //     const {data} = await axios.post<{message: MessageFromApi}>("/message/", {
-  //       conversationId,
-  //       text
-  //     })
-
-  //     setMessaageList((prev) => [...prev, data.message])
-
-  //   }catch(error) {
-  //     console.error("Error: ", error)
-  //   }
-  // }
-
-  const { emitMessage } = useWebSocket();
+  const isOnline = usePresenceStore((state) =>
+    recipientId ? state.onlineStatus[recipientId] : false
+  );
 
   const handleSend = async () => {
     if (!newMessage.trim()) return;
@@ -53,8 +43,8 @@ export const Messages = () => {
         }
       );
 
-      emitMessage(data.message); // ✅ emit full message to others
-      
+      emitMessage(data.message);
+
       setNewMessage(""); // clear input
     } catch (error) {
       console.error("Error sending message:", error);
@@ -73,14 +63,25 @@ export const Messages = () => {
               />
             </button>
           </div>
-          <div>
+          <div className="flex items-center space-x-3">
             <img
               className="h-10 aspect-square object-cover rounded-full"
               src="/images/avatar.svg"
               alt="avatar"
             />
+            <div className="flex flex-col">
+              <span className="font-semibold">
+                {conversationName || "Unknown User"}
+              </span>
+              <span
+                className={`text-sm ${
+                  isOnline ? "text-green-600" : "text-gray-500"
+                }`}
+              >
+                {isOnline ? "Online" : "Offline"}
+              </span>
+            </div>
           </div>
-          <div className="items-center flex">Chat App</div>
         </div>
         <div className="flex space-x-2 items-center">
           <div className="flex items-center">
@@ -105,12 +106,12 @@ export const Messages = () => {
           <input
             value={newMessage}
             onFocus={() => {
-              // startTyping();
+              emitTyping("start", conversationId, user!.id);
               setTimeout(() => {
                 lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
               }, 100);
             }}
-            // onBlur={() => stopTyping()}
+            onBlur={() => emitTyping("stop", conversationId, user!.id)}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             type="text"

@@ -35,7 +35,6 @@ export const MessageList = ({
       const { data } = await axios.get<{ messages: MessageFromApi[] }>(
         `/conversations/${conversationId}/messages`
       );
-      console.log("HHHHHHHHHHHHHHHHhey: ", data.messages)
       setMessageList(data.messages);
     } catch (error) {
       console.log("Error: ", error);

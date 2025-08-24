@@ -20,13 +20,15 @@ export const ConversationList = () => {
   );
   const setUsers = useUsersListStore((s) => s.setUsers);
   const setConversationId = useConversationIdStore((s) => s.setConversationId);
+  const setReciepentId = useConversationIdStore((s) => s.setRecipientId);
+  const setConversationName = useConversationIdStore((s) => s.setConversationName);
 
   const getUsers = async () => {
     const { data } = await axios.get<{ users: User[] }>("/users/");
     setUsers(data.users);
   };
 
-  const openMessage = async (reciepentId: string) => {
+  const openMessage = async (reciepentId: string, conversationName: string) => {
     try {
       const { data } = await axios.post<{ conversation: Conversation }>(
         "/conversations/start/",
@@ -35,6 +37,8 @@ export const ConversationList = () => {
         }
       );
       setConversationId(data.conversation.id);
+      setReciepentId(reciepentId)
+      setConversationName(conversationName)
       setMessageDisplay(true);
     } catch (error) {
       console.log(error);
@@ -56,7 +60,7 @@ export const ConversationList = () => {
       {users.map((user) => (
         <div
           key={user.id}
-          onClick={() => openMessage(user.id)}
+          onClick={() => openMessage(user.id, user.name)}
           className="flex space-x-2 space-y-2"
         >
           <div className="items-center flex">
