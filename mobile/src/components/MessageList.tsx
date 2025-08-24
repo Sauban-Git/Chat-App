@@ -22,9 +22,7 @@ export const MessageList = ({
     (state) => state.conversationId
   );
   const recipientId = useConversationIdStore((s) => s.recipientId)
-  const isOnline = usePresenceStore((state) =>
-    recipientId ? state.onlineStatus[recipientId] : false
-  );
+  
 
   // typingUsers is an object like { userId: true/false, ... }
   const typingUsers = typingStatus[conversationId] || {};
@@ -69,10 +67,11 @@ export const MessageList = ({
         return null;
     }
   };
+  
 
   useEffect(() => {
     updateMessageStatus();
-  }, [isOnline]);
+  }, []);
 
   useEffect(() => {
     getAllMessages();
@@ -87,18 +86,18 @@ export const MessageList = ({
   return (
     <div className="overflow-y-auto flex-1 space-y-2">
       {messages.map((msg, index) => {
-        const isSender = msg.senderId !== user!.id; // corrected sender check
+        const isRecipient = msg.senderId === recipientId; // corrected sender check
         const isLast = index === messages.length - 1;
         let status: "SENT" | "DELIVERED" | "READ" = "SENT";
-        if (msg.readAt) {
+        if (msg.readAt !== null) {
           status = "READ";
-        } else if (msg.deliveredAt) {
+        } else if (msg.deliveredAt !== null) {
           status = "DELIVERED";
         } else {
           status = "SENT";
         }
         const statusIcon = getStatusIcon(status);
-        return isSender ? (
+        return isRecipient ? (
           <div
             key={msg.id}
             ref={isLast ? lastMessageRef : undefined}

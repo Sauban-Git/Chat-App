@@ -1,78 +1,44 @@
-import { Server, Socket } from "socket.io";
-import { RedisPubSub } from "../db/redis.js";
-import jwt from "jsonwebtoken";
-import { JWT_SECRET } from "../config/jwt.js";
-import { prisma } from "../db/prisma.js";
+import { Server as HttpServer } from "http";
+import { Server as SocketIOServer, Socket } from "socket.io";
 import cookie from "cookie";
+import jwt from "jsonwebtoken";
+import {
+  addConversationSubscriber,
+  addUserOnlineClient,
+  addUserSubscriber,
+  getConversationSubscribers,
+  getUserOnlineClientCount,
+  removeConversationSubscriber,
+  removeUserOnlineClient,
+  removeUserSubscriber,
+  getAllOnlineUsers,
+} from "../db/redis.js";
+import { prisma } from "../db/prisma.js";
+import { JWT_SECRET } from "../config/jwt.js";
 
-type ChatEvents =
-  | "message:new"
-  | "conversation:new"
-  | "typing:start"
-  | "typing:stop"
-  | "status:online"
-  | "status:offline"
-  | "message:delivered"
-  | "message:read";
+type ExtendedSocket = Socket & { userId?: string; clientId?: string };
 
-interface PubSubPayload {
-  event: ChatEvents;
-  conversationId?: string;
-  userId?: string;
-  payload: any;
+const clientSubscriptions = new Map<string, Set<string>>(); // clientId -> conversationIds
+
+// Debounce broadcasting user online status to avoid spamming on rapid reconnects
+const broadcastTimers = new Map<string, NodeJS.Timeout>();
+
+function broadcastOnlineStatus(io: SocketIOServer, userId: string) {
+  io.emit("status:online", { userId });
+  console.log(`Broadcasted status:online for user ${userId}`);
 }
 
-const eventChannels = {
-  message: "channel:message:new",
-  conversation: "channel:conversation:new",
-  typingStart: "channel:typing:start",
-  typingStop: "channel:typing:stop",
-  statusOnline: "channel:status:online",
-  statusOffline: "channel:status:offline",
-  messageDelivered: "channel:message:delivered",
-  messageRead: "channel:message:read",
-};
-
-let isSubscribed = false;
-
-function setupRedisSubscriptions(io: Server) {
-  if (isSubscribed) return;
-
-  Object.values(eventChannels).forEach((channel) => {
-    RedisPubSub.subscribe(channel, (data: PubSubPayload) => {
-      const { event, conversationId, payload } = data;
-
-      if (event === "status:online" || event === "status:offline") {
-        io.emit(event, payload); // broadcast globally
-      } else if (event === "message:delivered" || event === "message:read") {
-        // Broadcast message status update to conversation room
-        if (conversationId) {
-          io.to(conversationId).emit(event, payload);
-        }
-      } else if (conversationId) {
-        io.to(conversationId).emit(event, payload);
-      } else {
-        io.emit(event, payload);
-      }
-    });
-  });
-
-  isSubscribed = true;
-}
-
-async function getUserConversations(userId: string): Promise<string[]> {
-  const conversations = await prisma.conversation.findMany({
-    where: {
-      OR: [{ user1Id: userId }, { user2Id: userId }],
+export async function setupSocket(server: HttpServer) {
+  const io = new SocketIOServer(server, {
+    cors: {
+      origin: process.env.CLIENT_URL,
+      methods: ["GET", "POST"],
+      credentials: true,
     },
-    select: { id: true },
   });
-
-  return conversations.map((c) => c.id);
-}
-
-export const setupSocket = (io: Server) => {
-  setupRedisSubscriptions(io);
+  console.log(
+    `Socket.IO server initialized with CORS origin: ${process.env.CLIENT_URL}`
+  );
 
   io.use((socket, next) => {
     try {
@@ -101,225 +67,160 @@ export const setupSocket = (io: Server) => {
     }
   });
 
-  io.on("connection", async (socket: Socket) => {
-    const userId = socket.data.userId;
-    console.log(`🔌 Socket connected: ${socket.id} | User: ${userId}`);
+  io.on("connection", async (socket: ExtendedSocket) => {
+    const userId = socket.data.userId!;
+    const clientId = socket.id; // socket.io id
+    socket.data.userId = userId;
+    socket.data.clientId = clientId;
 
-    if (!userId) return;
+    console.log(`Socket connected: userId=${userId}, clientId=${clientId}`);
 
-    // Track the active conversation for this socket connection
-    let activeConversationId: string | null = null;
+    // Mark user client online in Redis
+    await addUserOnlineClient(userId, clientId);
 
-    // Join user personal room
-    socket.join(userId);
+    // Send full online user list to the newly connected client
+    const onlineUsers = await getAllOnlineUsers();
+    socket.emit("status:online:all", { users: onlineUsers });
 
-    // Auto join all conversations user is part of
-    const userConversations = await getUserConversations(userId);
-    userConversations.forEach((conversationId) => {
-      socket.join(conversationId);
-      console.log(`📥 ${userId} joined conversation: ${conversationId}`);
+    // Broadcast to all others that this user is online (debounced)
+    broadcastOnlineStatus(io, userId);
+
+    // Auto-subscribe client to all conversations where user is user1 or user2
+    const userConversations = await prisma.conversation.findMany({
+      where: {
+        OR: [{ user1Id: userId }, { user2Id: userId }],
+      },
+      select: { id: true },
     });
 
-    // Mark all undelivered messages *to* this user as delivered (existing logic)
-    try {
-      const updated = await prisma.message.updateMany({
-        where: {
-          conversationId: { in: userConversations },
-          senderId: { not: userId }, // messages NOT sent by user
-          deliveredAt: null,
-        },
-        data: {
-          deliveredAt: new Date(),
-        },
-      });
-
-      if (updated.count > 0) {
-        userConversations.forEach((conversationId) => {
-          RedisPubSub.publish(eventChannels.messageDelivered, {
-            event: "message:delivered",
-            conversationId,
-            payload: {
-              userId,
-              conversationId,
-              deliveredAt: new Date().toISOString(),
-            },
-          });
-        });
-      }
-    } catch (error) {
-      console.error("Error updating delivered messages:", error);
+    const subs = new Set<string>();
+    for (const conv of userConversations) {
+      await addConversationSubscriber(conv.id, clientId);
+      subs.add(conv.id);
     }
+    clientSubscriptions.set(clientId, subs);
+    await addUserSubscriber(userId, clientId);
 
-    // Listen for manual join to conversation room (e.g. when user opens a conversation)
-    socket.on("join", async ({ conversationId }) => {
-      if (conversationId) {
-        activeConversationId = conversationId; // Track active conversation
+    // Listen to client subscription events
+    socket.on("subscribe", async (data) => {
+      if (data.conversationId) {
+        await addConversationSubscriber(data.conversationId, clientId);
+        const subs = clientSubscriptions.get(clientId) || new Set();
+        subs.add(data.conversationId);
+        clientSubscriptions.set(clientId, subs);
+        console.log(
+          `User ${userId} subscribed to conversation ${data.conversationId}`
+        );
+      }
+      if (data.list === "conversation_list") {
+        await addUserSubscriber(userId, clientId);
+        console.log(`User ${userId} subscribed to their conversation list`);
+      }
+    });
 
-        socket.join(conversationId);
-        console.log(`➡️ ${userId} manually joined: ${conversationId}`);
+    socket.on("typing:start", ({ conversationId }) => {
+      const clientId = socket.data.clientId!;
+      const userId = socket.data.userId!;
 
-        // Mark all unread messages in that conversation as read
-        try {
-          const updatedRead = await prisma.message.updateMany({
-            where: {
-              conversationId,
-              senderId: { not: userId },
-              readAt: null,
-            },
-            data: {
-              readAt: new Date(),
-            },
-          });
-
-          if (updatedRead.count > 0) {
-            RedisPubSub.publish(eventChannels.messageRead, {
-              event: "message:read",
-              conversationId,
-              payload: {
-                userId,
-                conversationId,
-                readAt: new Date().toISOString(),
-              },
-            });
+      getConversationSubscribers(conversationId).then((clientIds) => {
+        clientIds.forEach((cid) => {
+          const s = io.sockets.sockets.get(cid);
+          if (s && s.data.clientId !== clientId) {
+            s.emit("typing:start", { conversationId, userId });
           }
-        } catch (error) {
-          console.error("Error updating read messages:", error);
-        }
-      }
-
-      // Ensure user room is joined
-      socket.join(userId);
+        });
+      });
     });
 
-    // Optional: handle leave event
-    socket.on("leave", ({ conversationId }) => {
-      if (conversationId && activeConversationId === conversationId) {
-        activeConversationId = null;
-        socket.leave(conversationId);
-        console.log(`⬅️ ${userId} left conversation: ${conversationId}`);
-      }
+    socket.on("typing:stop", ({ conversationId }) => {
+      const clientId = socket.data.clientId!;
+      const userId = socket.data.userId!;
+
+      getConversationSubscribers(conversationId).then((clientIds) => {
+        clientIds.forEach((cid) => {
+          const s = io.sockets.sockets.get(cid);
+          if (s && s.data.clientId !== clientId) {
+            s.emit("typing:stop", { conversationId, userId });
+          }
+        });
+      });
     });
 
-    // Message events
-    socket.on("message:new", async (data) => {
-      RedisPubSub.publish(eventChannels.message, {
-        event: "message:new",
-        conversationId: data.conversationId,
-        payload: {
-          ...data,
+    // Listen for sending new messages
+    socket.on("message:new", async (payload) => {
+      const { conversationId, text } = payload;
+      if (!conversationId || !text) return;
+
+      // Verify user is participant of the conversation
+      const conversation = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { user1Id: true, user2Id: true },
+      });
+      if (!conversation) return;
+
+      if (userId !== conversation.user1Id && userId !== conversation.user2Id) {
+        // User not participant, ignore
+        return;
+      }
+
+      // Create message
+      const newMessage = await prisma.message.create({
+        data: {
+          conversationId,
           senderId: userId,
+          text,
+        },
+        include: {
+          sender: { select: { id: true, name: true, email: true } },
         },
       });
 
-      socket.on("message:read", async ({ conversationId }) => {
-        try {
-          const updated = await prisma.message.updateMany({
-            where: {
-              conversationId,
-              senderId: { not: userId },
-              readAt: null,
-            },
-            data: {
-              readAt: new Date(),
-            },
+      // Emit new message to all clients subscribed to this conversation
+      const clientIds = await getConversationSubscribers(conversationId);
+      for (const cid of clientIds) {
+        const clientSocket = io.sockets.sockets.get(cid);
+        if (clientSocket) {
+          clientSocket.emit("message:new", {
+            id: newMessage.id,
+            conversationId: newMessage.conversationId,
+            senderId: newMessage.sender.id,
+            text: newMessage.text,
+            createdAt: newMessage.createdAt,
+            deliveredAt: newMessage.deliveredAt,
+            readAt: newMessage.readAt,
           });
-
-          if (updated.count > 0) {
-            RedisPubSub.publish(eventChannels.messageRead, {
-              event: "message:read",
-              conversationId,
-              payload: {
-                userId,
-                conversationId,
-                readAt: new Date().toISOString(),
-              },
-            });
-          }
-        } catch (error) {
-          console.error("Error handling message:read emit:", error);
-        }
-      });
-
-      // Mark messages as read if message belongs to active conversation and sender is not user
-      if (
-        activeConversationId === data.conversationId &&
-        data.senderId !== userId
-      ) {
-        try {
-          await prisma.message.updateMany({
-            where: {
-              conversationId: data.conversationId,
-              senderId: { not: userId },
-              readAt: null,
-            },
-            data: { readAt: new Date() },
-          });
-
-          RedisPubSub.publish(eventChannels.messageRead, {
-            event: "message:read",
-            conversationId: data.conversationId,
-            payload: {
-              userId,
-              conversationId: data.conversationId,
-              readAt: new Date().toISOString(),
-            },
-          });
-        } catch (err) {
-          console.error("Error marking messages as read on message:new:", err);
         }
       }
     });
 
-    socket.on("conversation:new", (data) => {
-      RedisPubSub.publish(eventChannels.conversation, {
-        event: "conversation:new",
-        conversationId: data.conversationId,
-        payload: data,
-      });
+    // Client disconnect handler
+    socket.on("disconnect", async () => {
+      console.log(
+        `Socket disconnected: userId=${userId}, clientId=${clientId}`
+      );
+      await removeUserOnlineClient(userId, clientId);
+
+      // Check if user still online on other clients
+      const remaining = await getUserOnlineClientCount(userId);
+      if (remaining === 0) {
+        io.emit("status:offline", { userId });
+        console.log(`User ${userId} is OFFLINE`);
+      }
+
+      await removeUserSubscriber(userId, clientId);
+
+      const subs = clientSubscriptions.get(clientId);
+      if (subs) {
+        for (const convId of subs) {
+          await removeConversationSubscriber(convId, clientId);
+        }
+      }
+      clientSubscriptions.delete(clientId);
+      console.log(`Socket disconnected for user ${userId} client ${clientId}`);
     });
 
-    // Typing events
-    socket.on("typing:start", (data) => {
-      RedisPubSub.publish(eventChannels.typingStart, {
-        event: "typing:start",
-        conversationId: data.conversationId,
-        payload: { ...data, userId },
-      });
-    });
-
-    socket.on("typing:stop", (data) => {
-      RedisPubSub.publish(eventChannels.typingStop, {
-        event: "typing:stop",
-        conversationId: data.conversationId,
-        payload: { ...data, userId },
-      });
-    });
-
-    // Status online/offline events from client (do not trust userId from client)
-    socket.on("status:online", () => {
-      RedisPubSub.publish(eventChannels.statusOnline, {
-        event: "status:online",
-        userId,
-        payload: { userId },
-      });
-    });
-
-    socket.on("status:offline", () => {
-      RedisPubSub.publish(eventChannels.statusOffline, {
-        event: "status:offline",
-        userId,
-        payload: { userId },
-      });
-    });
-
-    socket.on("disconnect", () => {
-      console.log(`🔌 Disconnected: ${socket.id} | User: ${userId}`);
-
-      RedisPubSub.publish(eventChannels.statusOffline, {
-        event: "status:offline",
-        userId,
-        payload: { userId },
-      });
-    });
+    console.log(`Socket connected for user ${userId} client ${clientId}`);
   });
-};
+
+  return io;
+}

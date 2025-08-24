@@ -8,6 +8,7 @@ import type { MessageFromApi } from "../types/types";
 import { useWebSocket } from "../customHooks/useWebSocket";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useUserInfoStore } from "../store/userInfoStore";
+import { useMessageListStore } from "../store/messagesListStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
 
 export const Messages = () => {
@@ -18,8 +19,8 @@ export const Messages = () => {
   const [newMessage, setNewMessage] = useState("");
   const { conversationId, conversationName, recipientId } =
     useConversationIdStore();
-
   const user = useUserInfoStore((s) => s.user);
+  const setMessageList = useMessageListStore((s) => s.setMessageList);
 
   const goBack = () => {
     setConversationDisplay(true);
@@ -38,22 +39,37 @@ export const Messages = () => {
       let messagePayload;
       if (isOnline) {
         messagePayload = {
+          id: "temp-id-" + Date.now(),
           conversationId: conversationId,
           text: newMessage,
           readAt: new Date().toISOString(),
+          senderId: user!.id,
+          createdAt: new Date().toISOString(),
+          deliveredAt: new Date().toISOString(),
         };
       } else {
         messagePayload = {
+          id: "temp-id-" + Date.now(),
           conversationId: conversationId,
           text: newMessage,
+          senderId: user!.id,
+          deliveredAt: null,
+          readAt: null,
+          createdAt: new Date().toISOString(),
         };
       }
-      const { data } = await axios.post<{ message: MessageFromApi }>(
+      await axios.post<{ message: MessageFromApi }>(
         "/message/",
         messagePayload
       );
+      console.log("SenderId: ", messagePayload.senderId);
 
-      emitMessage(data.message);
+      emitMessage(messagePayload);
+      setMessageList((prev) => {
+        // Avoid duplicates
+        if (prev.some((msg) => msg.id === messagePayload.id)) return prev;
+        return [...prev, messagePayload];
+      });
 
       setNewMessage(""); // clear input
     } catch (error) {
@@ -117,12 +133,12 @@ export const Messages = () => {
           <input
             value={newMessage}
             onFocus={() => {
-              emitTyping("start", conversationId, user!.id);
+              emitTyping("start", conversationId);
               setTimeout(() => {
                 lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
               }, 100);
             }}
-            onBlur={() => emitTyping("stop", conversationId, user!.id)}
+            onBlur={() => emitTyping("stop", conversationId)}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             type="text"

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 
 import { useUserInfoStore } from "../store/userInfoStore";
@@ -6,13 +6,49 @@ import { useUsersListStore } from "../store/conversationListStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useMessageListStore } from "../store/messagesListStore";
+import axios from "../utils/axios";
+
 import type { MessageFromApi, MessageWithSender } from "../types/types";
 
+// Socket server URL
 const SOCKET_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
+
+// Helper: Update message delivery/read statuses in the message store
+const updateAllUnmarkedMessages = (
+  conversationId: string,
+  timestamp: string,
+  status: "delivered" | "read",
+  userId: string
+) => {
+  const isoTimestamp = new Date(timestamp).toISOString();
+
+  useMessageListStore.setState((prev) => {
+    const updatedMessages = prev.messageList.map((msg) => {
+      const isFromOtherUser = msg.senderId !== userId;
+      const inConversation = msg.conversationId === conversationId;
+
+      if (!inConversation || !isFromOtherUser) return msg;
+
+      if (status === "delivered" && !msg.deliveredAt) {
+        return { ...msg, deliveredAt: isoTimestamp };
+      } else if (status === "read" && !msg.readAt) {
+        return { ...msg, readAt: isoTimestamp };
+      }
+
+      return msg;
+    });
+
+    return { messageList: updatedMessages };
+  });
+};
 
 export function useWebSocket() {
   const socketRef = useRef<Socket | null>(null);
+
   const user = useUserInfoStore((state) => state.user);
+  const currentConversationId = useConversationIdStore(
+    (state) => state.conversationId
+  );
 
   const setOnlineStatus = usePresenceStore((state) => state.setOnlineStatus);
   const setTypingStatus = usePresenceStore((state) => state.setTypingStatus);
@@ -23,38 +59,23 @@ export function useWebSocket() {
     (state) => state.updateUserPresence
   );
 
-  const currentConversationId = useConversationIdStore(
-    (state) => state.conversationId
-  );
-
-  // Used to track if user switched conversation
   const previousConversationIdRef = useRef<string | null>(null);
 
-  const updateAllUnmarkedMessages = (
-    conversationId: string,
-    timestamp: string,
-    status: "delivered" | "read"
-  ) => {
-    const isoTimestamp = new Date(timestamp).toISOString();
+  const markMessageDelivered = async () => {
+    try {
+      await axios.put("/message/deliver");
+    } catch (err) {
+      console.error("Failed to mark message as delivered", err);
+    }
+  };
 
-    useMessageListStore.setState((prev) => {
-      const updatedMessages = prev.messageList.map((msg) => {
-        const isFromOtherUser = msg.senderId !== user?.id;
-        const inConversation = msg.conversationId === conversationId;
-
-        if (!inConversation || !isFromOtherUser) return msg;
-
-        if (status === "delivered" && !msg.deliveredAt) {
-          return { ...msg, deliveredAt: isoTimestamp };
-        } else if (status === "read" && !msg.readAt) {
-          return { ...msg, readAt: isoTimestamp };
-        }
-
-        return msg;
-      });
-
-      return { messageList: updatedMessages };
-    });
+  // Send "read"
+  const markMessageRead = async (conversationId: string) => {
+    try {
+      await axios.put("/message/read", { conversationId });
+    } catch (err) {
+      console.error("Failed to mark message as read", err);
+    }
   };
 
   useEffect(() => {
@@ -66,23 +87,33 @@ export function useWebSocket() {
 
     socketRef.current = socket;
 
+    // --- Lifecycle Events ---
     socket.on("connect", () => {
       console.log("✅ Socket connected:", socket.id);
-      socket.emit("status:online");
+      socket.emit("status:online"); // only needed if server tracks presence on explicit emit
     });
 
     socket.on("disconnect", (reason) => {
       console.log("❌ Socket disconnected:", reason);
     });
 
-    // Incoming messages
-    socket.on("message:new", (message: MessageWithSender) => {
+    // --- Message Events ---
+    socket.on("message:new", async (message: MessageWithSender) => {
       const isFromOtherUser = message.senderId !== user.id;
       const isInCurrentConversation =
         message.conversationId === currentConversationId;
 
+      if (isFromOtherUser) {
+        await markMessageDelivered();
+      }
+
       if (isFromOtherUser && isInCurrentConversation) {
-        // Reuse the same event
+        socket.emit("message:read", { conversationId: message.conversationId });
+        await markMessageRead(message.conversationId);
+      }
+
+      // Emit read if message is from other user & we're in that conversation
+      if (isFromOtherUser && isInCurrentConversation) {
         socket.emit("message:read", { conversationId: message.conversationId });
       }
 
@@ -104,6 +135,7 @@ export function useWebSocket() {
       }
     });
 
+    // --- Typing Events ---
     socket.on("typing:start", ({ conversationId, userId }) => {
       setTypingStatus(conversationId, userId, true);
     });
@@ -112,34 +144,50 @@ export function useWebSocket() {
       setTypingStatus(conversationId, userId, false);
     });
 
+    // --- Presence Events ---
+    socket.on("status:online:all", ({ users }: { users: string[] }) => {
+      console.log("📡 Received full online users list:", users);
+      users.forEach((userId) => {
+        setOnlineStatus(userId, true);
+        updateUserPresence(userId, true);
+      });
+    });
+
     socket.on("status:online", ({ userId }) => {
-      console.log("Received status:online for", userId);
+      console.log(`🟢 User ${userId} is now online (real-time event)`);
       setOnlineStatus(userId, true);
       updateUserPresence(userId, true);
     });
 
     socket.on("status:offline", ({ userId }) => {
+      console.log(`🔴 User ${userId} went offline (real-time event)`);
       setOnlineStatus(userId, false);
       updateUserPresence(userId, false);
     });
 
+    // --- Message Status Updates ---
     socket.on("message:delivered", ({ conversationId, deliveredAt }) => {
-      updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
+      updateAllUnmarkedMessages(
+        conversationId,
+        deliveredAt,
+        "delivered",
+        user.id
+      );
     });
 
     socket.on("message:read", ({ conversationId, readAt }) => {
-      updateAllUnmarkedMessages(conversationId, readAt, "read");
+      updateAllUnmarkedMessages(conversationId, readAt, "read", user.id);
     });
 
-    // Graceful disconnect
+    // Graceful cleanup
     const handleBeforeUnload = () => {
-      socket.emit("status:offline", { userId: user.id });
+      // Do NOT emit status:offline manually — server tracks this
+      socket.disconnect();
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
-      socket.emit("status:offline", { userId: user.id });
       socket.disconnect();
       socketRef.current = null;
       window.removeEventListener("beforeunload", handleBeforeUnload);
@@ -147,9 +195,9 @@ export function useWebSocket() {
     };
   }, [user]);
 
-  // JOIN/LEAVE conversation logic
+  // --- Join/Leave Conversation Rooms ---
   useEffect(() => {
-    if (!socketRef.current || !socketRef.current.connected || !user) return;
+    if (!socketRef.current?.connected || !user) return;
 
     const socket = socketRef.current;
     const prevId = previousConversationIdRef.current;
@@ -166,29 +214,33 @@ export function useWebSocket() {
     }
 
     previousConversationIdRef.current = currId;
-  }, [currentConversationId]);
+  }, [currentConversationId, user]);
 
-  // ---- Emit Handlers ----
-
-  const emitMessage = (message: MessageFromApi) => {
+  // --- Emit Functions ---
+  const emitMessage = useCallback((message: MessageFromApi) => {
     if (socketRef.current?.connected) {
       socketRef.current.emit("message:new", message);
     }
-  };
+  }, []);
 
-  const emitTyping = (
-    type: "start" | "stop",
-    conversationId: string,
-    userId: string
-  ) => {
-    if (!socketRef.current?.connected) return;
+  // const emitTyping = useCallback(
+  //   (type: "start" | "stop", conversationId: string) => {
+  //     if (!socketRef.current?.connected) return;
 
-    if (type === "start") {
-      socketRef.current.emit("typing:start", { conversationId, userId });
-    } else {
-      socketRef.current.emit("typing:stop", { conversationId, userId });
-    }
-  };
+  //     const event = type === "start" ? "typing:start" : "typing:stop";
+  //     socketRef.current.emit(event, { conversationId });
+  //   },
+  //   []
+  // );
+
+  const emitTyping = useCallback(
+    (type: "start" | "stop", conversationId: string) => {
+      if (!socketRef.current?.connected) return;
+      const event = type === "start" ? "typing:start" : "typing:stop";
+      socketRef.current.emit(event, { conversationId });
+    },
+    []
+  );
 
   return {
     emitMessage,
