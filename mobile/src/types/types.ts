@@ -33,3 +33,5 @@ export interface UserInfoApi {
   name?: string
   email: string
 }
+
+export type MessageStatusType = "READ" | "DELIVERED" | "SENT";

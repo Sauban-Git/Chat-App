@@ -5,158 +5,116 @@ import { useUserInfoStore } from "../store/userInfoStore";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useMessageListStore } from "../store/messagesListStore";
 import axios from "../utils/axios";
-import type { MessageFromApi } from "../types/types";
-import dayjs from "dayjs";
+import { MessageItem } from "./MessageItem";
 
 export const MessageList = ({
   lastMessageRef,
 }: {
   lastMessageRef: React.RefObject<HTMLDivElement | null>;
 }) => {
-  const messages = useMessageListStore((state) => state.messageList);
+  const messageMap = useMessageListStore((state) => state.messageMap);
   const setMessageList = useMessageListStore((state) => state.setMessageList);
+  const updateMessageStatus = useMessageListStore((s) => s.updateMessageStatus);
+
   const user = useUserInfoStore((state) => state.user);
-
   const typingStatus = usePresenceStore((state) => state.typingStatus);
-  const conversationId = useConversationIdStore(
-    (state) => state.conversationId
-  );
-  const recipientId = useConversationIdStore((s) => s.recipientId)
-  
+  const conversationId = useConversationIdStore((state) => state.conversationId);
+  const recipientId = useConversationIdStore((s) => s.recipientId);
 
-  // typingUsers is an object like { userId: true/false, ... }
   const typingUsers = typingStatus[conversationId] || {};
-
-  // Check if anyone except the current user is typing
   const isSomeoneTyping = Object.entries(typingUsers).some(
-    ([typingUserId, isTyping]) => typingUserId !== user!.id && isTyping
+    ([typingUserId, isTyping]) => typingUserId !== user?.id && isTyping
   );
 
   const getAllMessages = async () => {
-    if (!conversationId) return; // exit early if no conversationId yet
+    if (!conversationId) return;
 
     try {
-      const { data } = await axios.get<{ messages: MessageFromApi[] }>(
-        `/conversations/${conversationId}/messages`
-      );
+      const { data } = await axios.get(`/conversations/${conversationId}/messages`);
       setMessageList(data.messages);
     } catch (error) {
-      console.log("Error: ", error);
+      console.log("Error fetching messages: ", error);
     }
   };
 
-  const updateMessageStatus = async () => {
+  const markMessagesAsRead = async () => {
+    if (!conversationId || !user) return;
+
     try {
-      await axios.put("/message/read", {
+      const { data } = await axios.put("/message/read", {
         conversationId,
       });
+
+      if (data?.readAt) {
+        // update all messages in this conversation as read
+        updateMessageStatus(conversationId, "read", data.readAt, user.id);
+      }
     } catch (error) {
-      console.log("Error: ", error);
+      console.log("Error marking messages as read: ", error);
     }
   };
-
-  const getStatusIcon = (status?: string) => {
-    switch (status) {
-      case "SENT":
-        return "/images/sent.svg";
-      case "DELIVERED":
-        return "/images/delivered.svg";
-      case "READ":
-        return "/images/read.svg";
-      default:
-        return null;
-    }
-  };
-  
-
-  useEffect(() => {
-    updateMessageStatus();
-  }, []);
 
   useEffect(() => {
     getAllMessages();
   }, []);
 
   useEffect(() => {
+    markMessagesAsRead();
+  }, []);
+
+  useEffect(() => {
     if (lastMessageRef.current) {
       lastMessageRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [typingStatus, messages]); // scroll when messages or typing changes
+  }, [typingStatus]);
+
+  const sortedMessages = Object.values(messageMap).sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
 
   return (
     <div className="overflow-y-auto flex-1 h-[100dvh] space-y-2">
-      {messages.map((msg, index) => {
-        const isRecipient = msg.senderId === recipientId; // corrected sender check
-        const isLast = index === messages.length - 1;
-        let status: "SENT" | "DELIVERED" | "READ" = "SENT";
-        if (msg.readAt !== null) {
-          status = "READ";
-        } else if (msg.deliveredAt !== null) {
-          status = "DELIVERED";
-        } else {
-          status = "SENT";
-        }
-        const statusIcon = getStatusIcon(status);
-        return isRecipient ? (
-          <div
+      {sortedMessages.map((msg, index) => {
+        const isRecipient = msg.senderId === recipientId;
+        const isLast = index === sortedMessages.length - 1;
+
+        return (
+          <MessageItem
             key={msg.id}
-            ref={isLast ? lastMessageRef : undefined}
-            className="flex justify-start"
-          >
-            <div className="inline-block bg-neutral-200 rounded-2xl py-2 px-3 text-black">
-              <div className="flex flex-col py-2">
-                <p className="text-sm">{msg.text}</p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div
-            key={msg.id}
-            ref={isLast ? lastMessageRef : undefined}
-            className="flex justify-end"
-          >
-            <div className="inline-block bg-neutral-500 rounded-2xl py-2 px-3 text-white">
-              <div className="flex flex-col py-2">
-                <p className="text-sm">{msg.text}</p>
-                <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-gray-200 opacity-70">
-                  <span>{dayjs(msg.createdAt).format("h:mm A")}</span>
-                  {statusIcon && (
-                    <img src={statusIcon} alt={status} className="w-6" />
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+            messageId={msg.id}
+            isRecipient={isRecipient}
+            lastMessageRef={isLast ? lastMessageRef : undefined}
+          />
         );
       })}
 
-      {/* Typing indicator div, rendered only if someone else is typing */}
+      {/* Typing indicator */}
       {isSomeoneTyping && (
-  <div className="flex justify-start">
-    <motion.div
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 5 }}
-      transition={{ duration: 0.3 }}
-      className="inline-block bg-neutral-200 rounded-2xl py-2 px-3 text-black italic"
-    >
-      <div className="flex gap-1">
-        {[0, 1, 2].map((i) => (
-          <motion.span
-            key={i}
-            className="w-2 h-2 bg-black rounded-full"
-            animate={{ y: [0, -3, 0] }}
-            transition={{
-              duration: 0.6,
-              repeat: Infinity,
-              delay: i * 0.2, // stagger dots
-            }}
-          />
-        ))}
-      </div>
-    </motion.div>
-  </div>
-)}
+        <div className="flex justify-start">
+          <motion.div
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 5 }}
+            transition={{ duration: 0.3 }}
+            className="inline-block bg-neutral-200 rounded-2xl py-2 px-3 text-black italic"
+          >
+            <div className="flex gap-1">
+              {[0, 1, 2].map((i) => (
+                <motion.span
+                  key={i}
+                  className="w-2 h-2 bg-black rounded-full"
+                  animate={{ y: [0, -3, 0] }}
+                  transition={{
+                    duration: 0.6,
+                    repeat: Infinity,
+                    delay: i * 0.2,
+                  }}
+                />
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

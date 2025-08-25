@@ -195,30 +195,164 @@ export async function setupSocket(server: HttpServer) {
       }
     });
 
-    socket.on("disconnect", async () => {
-      console.log(`Socket disconnected: userId=${userId}, clientId=${clientId}`);
+    // -----------------------------
+    // ✅ Handle message:deliver
+    // -----------------------------
+    socket.on("message:deliver", async ({ conversationId }) => {
+      if (!conversationId) return;
 
-      await removeUserOnlineClient(userId, clientId);
-      console.log(`Removed clientId ${clientId} from user ${userId} online clients.`);
+      const now = new Date();
 
-      const remaining = await getUserOnlineClientCount(userId);
-      console.log(`Remaining online clients for user ${userId}: ${remaining}`);
+      // Update all messages in DB from other user in this conversation that are not delivered
+      await prisma.message.updateMany({
+        where: {
+          conversationId,
+          senderId: { not: userId },
+          deliveredAt: null,
+        },
+        data: {
+          deliveredAt: now,
+        },
+      });
 
-      if (remaining === 0) {
-        io.emit("status:offline", { userId });
-        console.log(`User ${userId} is OFFLINE`);
-      }
-
-      await removeUserSubscriber(userId, clientId);
-
-      const subs = clientSubscriptions.get(clientId);
-      if (subs) {
-        for (const convId of subs) {
-          await removeConversationSubscriber(convId, clientId);
+      // Notify all clients in this conversation
+      const clientIds = await getConversationSubscribers(conversationId);
+      for (const cid of clientIds) {
+        const clientSocket = io.sockets.sockets.get(cid);
+        if (clientSocket) {
+          clientSocket.emit("message:delivered", {
+            conversationId,
+            deliveredAt: now.toISOString(),
+          });
         }
       }
-      clientSubscriptions.delete(clientId);
-      console.log(`Socket disconnected for user ${userId} client ${clientId}`);
+    });
+
+    // -----------------------------
+    // ✅ Handle message:read
+    // -----------------------------
+    socket.on("message:read", async ({ conversationId }) => {
+      if (!conversationId) return;
+
+      const now = new Date();
+
+      // Update all messages from other user in this conversation that are not read
+      await prisma.message.updateMany({
+        where: {
+          conversationId,
+          senderId: { not: userId },
+          readAt: null,
+        },
+        data: {
+          readAt: now,
+        },
+      });
+
+      // Notify all clients in this conversation
+      const clientIds = await getConversationSubscribers(conversationId);
+      for (const cid of clientIds) {
+        const clientSocket = io.sockets.sockets.get(cid);
+        if (clientSocket) {
+          clientSocket.emit("message:read", {
+            conversationId,
+            readAt: now.toISOString(),
+          });
+        }
+      }
+    });
+
+    // -----------------------------
+    // ✅ Handle conversation:join
+    // -----------------------------
+    socket.on("conversation:join", async ({ conversationId }) => {
+      if (!conversationId) return;
+
+      // Verify user is participant of the conversation
+      const conversation = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { user1Id: true, user2Id: true },
+      });
+      if (!conversation) return;
+
+      if (userId !== conversation.user1Id && userId !== conversation.user2Id) {
+        // User not participant, ignore
+        return;
+      }
+
+      // Subscribe client to this conversation
+      await addConversationSubscriber(conversationId, clientId);
+      const subs = clientSubscriptions.get(clientId) || new Set();
+      subs.add(conversationId);
+      clientSubscriptions.set(clientId, subs);
+
+      console.log(`User ${userId} joined conversation ${conversationId}`);
+
+      // 🔹 Auto-mark messages as read when joining
+      const now = new Date();
+
+      await prisma.message.updateMany({
+        where: {
+          conversationId,
+          senderId: { not: userId },
+          readAt: null,
+        },
+        data: {
+          readAt: now,
+        },
+      });
+
+      // Notify all clients in this conversation
+      const clientIds = await getConversationSubscribers(conversationId);
+      for (const cid of clientIds) {
+        const clientSocket = io.sockets.sockets.get(cid);
+        if (clientSocket) {
+          clientSocket.emit("message:read", {
+            conversationId,
+            readAt: now.toISOString(),
+          });
+        }
+      }
+    });
+
+    socket.on("conversation:leave", async ({ conversationId }) => {
+      console.log(`🟠 ${socket.id} leaving conversation ${conversationId}`);
+
+      // Remove from Redis subscriptions
+      await removeConversationSubscriber(conversationId, clientId);
+
+      // Remove from in-memory subscriptions
+      const subs = clientSubscriptions.get(clientId);
+      if (subs) subs.delete(conversationId);
+
+      console.log(
+        `User ${userId} unsubscribed from conversation ${conversationId}`
+      );
+    });
+
+    socket.on("disconnect", async () => {
+      console.log(`🔴 Socket disconnected: ${socket.id} for user ${userId}`);
+
+      // Unsubscribe this client from all conversations
+      const subs = clientSubscriptions.get(clientId);
+      if (subs) {
+        for (const conversationId of subs) {
+          await removeConversationSubscriber(conversationId, clientId);
+          console.log(
+            `User ${userId} unsubscribed from conversation ${conversationId}`
+          );
+        }
+        clientSubscriptions.delete(clientId);
+      }
+
+      // ✅ Remove from Redis presence tracking
+      await removeUserOnlineClient(userId, clientId);
+
+      // ✅ Check if user still has other active connections
+      const count = await getUserOnlineClientCount(userId);
+      if (count === 0) {
+        io.emit("status:offline", { userId });
+        console.log(`Broadcasted status:offline for user ${userId}`);
+      }
     });
 
     console.log(`Socket connected for user ${userId} client ${clientId}`);

@@ -8,7 +8,6 @@ import type { MessageFromApi } from "../types/types";
 import { useWebSocket } from "../customHooks/useWebSocket";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useUserInfoStore } from "../store/userInfoStore";
-import { useMessageListStore } from "../store/messagesListStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
 
 export const Messages = () => {
@@ -20,7 +19,6 @@ export const Messages = () => {
   const { conversationId, conversationName, recipientId } =
     useConversationIdStore();
   const user = useUserInfoStore((s) => s.user);
-  const setMessageList = useMessageListStore((s) => s.setMessageList);
 
   const goBack = () => {
     setConversationDisplay(true);
@@ -65,11 +63,6 @@ export const Messages = () => {
       console.log("SenderId: ", messagePayload.senderId);
 
       emitMessage(messagePayload);
-      setMessageList((prev) => {
-        // Avoid duplicates
-        if (prev.some((msg) => msg.id === messagePayload.id)) return prev;
-        return [...prev, messagePayload];
-      });
 
       setNewMessage(""); // clear input
     } catch (error) {
