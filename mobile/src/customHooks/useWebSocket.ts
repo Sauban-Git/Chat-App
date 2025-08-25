@@ -10,6 +10,9 @@ import { useMessageListStore } from "../store/messagesListStore";
 import type { MessageFromApi, MessageWithSender } from "../types/types";
 
 const SOCKET_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
+const socket = io(SOCKET_URL, {
+  withCredentials: true,
+});
 
 const updateAllUnmarkedMessages = (
   conversationId: string,
@@ -57,10 +60,6 @@ export function useWebSocket() {
 
   useEffect(() => {
     if (!user) return;
-
-    const socket = io(SOCKET_URL, {
-      withCredentials: true,
-    });
 
     socketRef.current = socket;
 
@@ -145,7 +144,7 @@ export function useWebSocket() {
       socketRef.current = null;
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     if (!socketRef.current?.connected || !user) return;
