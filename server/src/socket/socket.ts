@@ -1,16 +1,16 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient } from "redis";
 import cookie from "cookie";
 import jwt from "jsonwebtoken";
 import {
   addConversationSubscriber,
-  addUserOnlineClient,
   addUserSubscriber,
   getConversationSubscribers,
-  getUserOnlineClientCount,
   removeConversationSubscriber,
-  removeUserOnlineClient,
-  removeUserSubscriber,
+  markUserOnline,
+  markUserOffline,
   getAllOnlineUsers,
 } from "../db/redis.js";
 import { prisma } from "../db/prisma.js";
@@ -18,37 +18,41 @@ import { JWT_SECRET } from "../config/jwt.js";
 
 type ExtendedSocket = Socket & { userId?: string; clientId?: string };
 
-const clientSubscriptions = new Map<string, Set<string>>(); // clientId -> conversationIds
+const clientSubscriptions = new Map<string, Set<string>>();
 
 export async function setupSocket(server: HttpServer) {
   const io = new SocketIOServer(server, {
-    cors: {
-      origin: process.env.CLIENT_URL,
-      methods: ["GET", "POST"],
-      credentials: true,
-    },
+    cors: { origin: process.env.CLIENT_URL, methods: ["GET", "POST"], credentials: true },
     pingTimeout: 10000,
     pingInterval: 5000,
   });
 
+  // Redis Adapter for scaling
+  const pubClient = createClient({ url: process.env.REDIS_URL! });
+  const subClient = pubClient.duplicate();
+  await pubClient.connect();
+  await subClient.connect();
+  io.adapter(createAdapter(pubClient, subClient) as any);
+
+  // -----------------------------
+  // Authentication middleware
+  // -----------------------------
   io.use((socket, next) => {
     try {
-      const cookieHeader = socket.handshake.headers.cookie;
-      if (!cookieHeader) return next(new Error("No cookies found"));
+      const cookies = socket.handshake.headers.cookie;
+      if (!cookies) return next(new Error("No cookies found"));
 
-      const parsedCookies = cookie.parse(cookieHeader);
-      const token = parsedCookies.token;
-      if (!token) return next(new Error("Token not found in cookies"));
+      const parsed = cookie.parse(cookies);
+      const token = parsed.token;
+      if (!token) return next(new Error("Token not found"));
 
-      const decoded = jwt.verify(token, JWT_SECRET);
-      if (typeof decoded !== "object" || !decoded.userId) {
-        return next(new Error("Invalid token"));
-      }
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+      if (!decoded.userId) return next(new Error("Invalid token"));
 
       socket.data.userId = decoded.userId;
       next();
     } catch {
-      return next(new Error("Authentication failed"));
+      next(new Error("Authentication failed"));
     }
   });
 
@@ -57,29 +61,26 @@ export async function setupSocket(server: HttpServer) {
     const clientId = socket.id;
     socket.data.clientId = clientId;
 
-    // Disconnect other sockets for same user (enforce one connection)
+    // Disconnect other sockets for the same user
     for (const [id, s] of io.sockets.sockets) {
-      if (s.data.userId === userId && id !== clientId) {
-        s.disconnect(true);
-      }
+      if (s.data.userId === userId && id !== clientId) s.disconnect(true);
     }
 
     // -----------------------------
-    // Step 1: Presence - mark online
+    // Mark user online
     // -----------------------------
-    await addUserOnlineClient(userId, clientId);
+    await markUserOnline(userId);
 
-    // Step 2: Send full online list to THIS socket ONLY
+    // Send full online list
     const onlineUsers = await getAllOnlineUsers();
-    // This ensures the new user sees all currently online users immediately
+    console.log("Online Users: ", onlineUsers);
     socket.emit("status:online:all", { users: onlineUsers });
 
-    // Step 3: Broadcast to others that THIS user is online
-    socket.broadcast.emit("status:online", { userId });
-    console.log(`✅ status:online — user ${userId}`);
+    // Broadcast to others
+    io.emit("status:online", { userId });
 
     // -----------------------------
-    // Step 4: Auto-subscribe to conversations
+    // Subscribe to conversations
     // -----------------------------
     const userConversations = await prisma.conversation.findMany({
       where: { OR: [{ user1Id: userId }, { user2Id: userId }] },
@@ -95,183 +96,110 @@ export async function setupSocket(server: HttpServer) {
     await addUserSubscriber(userId, clientId);
 
     // -----------------------------
-    // Typing
+    // Typing / messaging
     // -----------------------------
-    socket.on("typing:start", ({ conversationId }) => {
-      getConversationSubscribers(conversationId).then((clientIds) => {
-        clientIds.forEach((cid) => {
-          const s = io.sockets.sockets.get(cid);
-          if (s && s.data.clientId !== clientId) {
-            s.emit("typing:start", { conversationId, userId });
-          }
-        });
-      });
-    });
+    const handleTyping = async (event: "typing:start" | "typing:stop", conversationId: string) => {
+      const cids = await getConversationSubscribers(conversationId);
+      for (const cid of cids) {
+        const s = io.sockets.sockets.get(cid);
+        if (s && s.data.clientId !== clientId) s.emit(event, { conversationId, userId });
+      }
+    };
 
-    socket.on("typing:stop", ({ conversationId }) => {
-      getConversationSubscribers(conversationId).then((clientIds) => {
-        clientIds.forEach((cid) => {
-          const s = io.sockets.sockets.get(cid);
-          if (s && s.data.clientId !== clientId) {
-            s.emit("typing:stop", { conversationId, userId });
-          }
-        });
-      });
-    });
+    socket.on("typing:start", ({ conversationId }) => handleTyping("typing:start", conversationId));
+    socket.on("typing:stop", ({ conversationId }) => handleTyping("typing:stop", conversationId));
 
-    // -----------------------------
-    // Message send
-    // -----------------------------
+    const handleMessageUpdate = async (type: "delivered" | "read", conversationId: string) => {
+      const now = new Date();
+      const where = { conversationId, senderId: { not: userId }, [`${type}At`]: null } as any;
+      const data = { [`${type}At`]: now } as any;
+      await prisma.message.updateMany({ where, data });
+
+      const cids = await getConversationSubscribers(conversationId);
+      for (const cid of cids) {
+        const s = io.sockets.sockets.get(cid);
+        s?.emit(`message:${type}`, { conversationId, [`${type}At`]: now.toISOString() });
+      }
+    };
+
     socket.on("message:new", async ({ conversationId, text }) => {
       if (!conversationId || !text) return;
 
-      const conversation = await prisma.conversation.findUnique({
+      const conv = await prisma.conversation.findUnique({
         where: { id: conversationId },
         select: { user1Id: true, user2Id: true },
       });
-      if (!conversation) return;
-      if (userId !== conversation.user1Id && userId !== conversation.user2Id) {
-        return;
-      }
+      if (!conv || (userId !== conv.user1Id && userId !== conv.user2Id)) return;
 
       const newMessage = await prisma.message.create({
-        data: {
-          conversationId,
-          senderId: userId,
-          text,
-        },
-        include: {
-          sender: { select: { id: true, name: true, email: true } },
-        },
+        data: { conversationId, senderId: userId, text },
+        include: { sender: { select: { id: true, name: true, email: true } } },
       });
 
-      const clientIds = await getConversationSubscribers(conversationId);
-      for (const cid of clientIds) {
-        const clientSocket = io.sockets.sockets.get(cid);
-        if (clientSocket) {
-          clientSocket.emit("message:new", {
-            id: newMessage.id,
-            conversationId: newMessage.conversationId,
-            senderId: newMessage.sender.id,
-            text: newMessage.text,
-            createdAt: newMessage.createdAt,
-            deliveredAt: newMessage.deliveredAt,
-            readAt: newMessage.readAt,
-          });
-        }
-      }
-    });
-
-    // -----------------------------
-    // Message delivery + read
-    // -----------------------------
-    socket.on("message:deliver", async ({ conversationId }) => {
-      if (!conversationId) return;
-      const now = new Date();
-      await prisma.message.updateMany({
-        where: {
-          conversationId,
-          senderId: { not: userId },
-          deliveredAt: null,
-        },
-        data: { deliveredAt: now },
-      });
-
-      const clientIds = await getConversationSubscribers(conversationId);
-      for (const cid of clientIds) {
-        const clientSocket = io.sockets.sockets.get(cid);
-        clientSocket?.emit("message:delivered", {
-          conversationId,
-          deliveredAt: now.toISOString(),
+      const cids = await getConversationSubscribers(conversationId);
+      for (const cid of cids) {
+        const s = io.sockets.sockets.get(cid);
+        s?.emit("message:new", {
+          id: newMessage.id,
+          conversationId: newMessage.conversationId,
+          senderId: newMessage.sender.id,
+          text: newMessage.text,
+          createdAt: newMessage.createdAt,
+          deliveredAt: newMessage.deliveredAt,
+          readAt: newMessage.readAt,
         });
       }
     });
 
-    socket.on("message:read", async ({ conversationId }) => {
-      if (!conversationId) return;
-      const now = new Date();
-      await prisma.message.updateMany({
-        where: {
-          conversationId,
-          senderId: { not: userId },
-          readAt: null,
-        },
-        data: { readAt: now },
-      });
-
-      const clientIds = await getConversationSubscribers(conversationId);
-      for (const cid of clientIds) {
-        const clientSocket = io.sockets.sockets.get(cid);
-        clientSocket?.emit("message:read", {
-          conversationId,
-          readAt: now.toISOString(),
-        });
-      }
-    });
+    socket.on("message:deliver", ({ conversationId }) => handleMessageUpdate("delivered", conversationId));
+    socket.on("message:read", ({ conversationId }) => handleMessageUpdate("read", conversationId));
 
     // -----------------------------
-    // Conversation join/leave
+    // Join / leave conversations
     // -----------------------------
     socket.on("conversation:join", async ({ conversationId }) => {
       if (!conversationId) return;
-      const conversation = await prisma.conversation.findUnique({
+
+      const conv = await prisma.conversation.findUnique({
         where: { id: conversationId },
         select: { user1Id: true, user2Id: true },
       });
-      if (!conversation) return;
-      if (userId !== conversation.user1Id && userId !== conversation.user2Id) {
-        return;
-      }
+      if (!conv || (userId !== conv.user1Id && userId !== conv.user2Id)) return;
 
       await addConversationSubscriber(conversationId, clientId);
       const subs = clientSubscriptions.get(clientId) || new Set();
       subs.add(conversationId);
       clientSubscriptions.set(clientId, subs);
-
-      const now = new Date();
-      await prisma.message.updateMany({
-        where: {
-          conversationId,
-          senderId: { not: userId },
-          readAt: null,
-        },
-        data: { readAt: now },
-      });
-
-      const clientIds = await getConversationSubscribers(conversationId);
-      for (const cid of clientIds) {
-        const clientSocket = io.sockets.sockets.get(cid);
-        clientSocket?.emit("message:read", {
-          conversationId,
-          readAt: now.toISOString(),
-        });
-      }
     });
 
     socket.on("conversation:leave", async ({ conversationId }) => {
       await removeConversationSubscriber(conversationId, clientId);
-      const subs = clientSubscriptions.get(clientId);
-      subs?.delete(conversationId);
+      clientSubscriptions.get(clientId)?.delete(conversationId);
+    });
+
+    // -----------------------------
+    // Support request:online:all
+    // -----------------------------
+    socket.on("request:online:all", async () => {
+      const allOnline = await getAllOnlineUsers();
+      socket.emit("status:online:all", { users: allOnline });
     });
 
     // -----------------------------
     // Disconnect
     // -----------------------------
     socket.on("disconnect", async () => {
-      const subs = clientSubscriptions.get(clientId);
-      if (subs) {
-        for (const conversationId of subs) {
-          await removeConversationSubscriber(conversationId, clientId);
-        }
-        clientSubscriptions.delete(clientId);
+      clientSubscriptions.get(clientId)?.forEach(async (convId) => await removeConversationSubscriber(convId, clientId));
+      clientSubscriptions.delete(clientId);
+
+      const activeSockets = [...io.sockets.sockets.values()].filter((s) => s.data.userId === userId);
+      if (activeSockets.length === 0) {
+        await markUserOffline(userId);
+        io.emit("status:offline", { userId });
       }
 
-      await removeUserOnlineClient(userId, clientId);
-      const count = await getUserOnlineClientCount(userId);
-      if (count === 0) {
-        io.emit("status:offline", { userId });
-        console.log(`❌ status:offline — user ${userId}`);
-      }
+      const onlineUsers = await getAllOnlineUsers();
+      console.log("💚 Online users:", onlineUsers);
     });
   });
 
