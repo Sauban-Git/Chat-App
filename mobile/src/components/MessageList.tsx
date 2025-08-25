@@ -84,7 +84,7 @@ export const MessageList = ({
   }, [typingStatus, messages]); // scroll when messages or typing changes
 
   return (
-    <div className="overflow-y-auto flex-1 space-y-2">
+    <div className="overflow-y-auto flex-1 h-[100dvh] space-y-2">
       {messages.map((msg, index) => {
         const isRecipient = msg.senderId === recipientId; // corrected sender check
         const isLast = index === messages.length - 1;
