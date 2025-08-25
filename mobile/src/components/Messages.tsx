@@ -5,7 +5,7 @@ import { useConversationIdStore } from "../store/conversationIdStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
 import axios from "../utils/axios";
 import type { MessageFromApi } from "../types/types";
-import { useWebSocket } from "../customHooks/useWebSocket";
+import { useSocketEmitters } from "../customHooks/useWebSocket";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useUserInfoStore } from "../store/userInfoStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
@@ -24,7 +24,8 @@ export const Messages = () => {
     setConversationDisplay(true);
   };
 
-  const { emitMessage, emitTyping } = useWebSocket();
+  const { emitMessage, emitTyping } = useSocketEmitters();
+
 
   const isOnline = usePresenceStore((state) =>
     recipientId ? state.onlineStatus[recipientId] : false
@@ -69,7 +70,7 @@ export const Messages = () => {
       console.error("Error sending message:", error);
     }
   };
-  useEffect(() => {}, [emitMessage, isOnline]);
+  useEffect(() => {}, [emitMessage, isOnline, recipientId]);
 
   return (
     <div className="rounded-xl p-4 h-[100dvh]">

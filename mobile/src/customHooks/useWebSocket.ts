@@ -1,186 +1,177 @@
-import { useEffect, useRef, useCallback } from "react";
-import { io, Socket } from "socket.io-client";
+// useSocket.ts
+import { useCallback, useEffect, useRef } from "react";
 
 import { useUserInfoStore } from "../store/userInfoStore";
-import { useUsersListStore } from "../store/conversationListStore";
 import { useConversationIdStore } from "../store/conversationIdStore";
 import { usePresenceStore } from "../store/userPresenceStore";
+import { useUsersListStore } from "../store/conversationListStore";
 import { useMessageListStore } from "../store/messagesListStore";
-
-import type { MessageFromApi, MessageWithSender } from "../types/types";
-
-const SOCKET_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3000";
-const socket = io(SOCKET_URL, {
-  withCredentials: true,
-});
+import type { Conversation, MessageFromApi, MessageWithSender } from "../types/types";
+import { socket } from "../utils/socket";
 
 const updateAllUnmarkedMessages = (
   conversationId: string,
   timestamp: string,
   status: "delivered" | "read"
 ) => {
-  const isoTimestamp = new Date(timestamp).toISOString();
-
+  const iso = new Date(timestamp).toISOString();
   useMessageListStore.setState((prev) => {
-    const updatedMap = { ...prev.messageMap };
-
-    Object.values(updatedMap).forEach((msg) => {
-      const inConversation = msg.conversationId === conversationId;
-      if (!inConversation) return;
-
-      if (status === "delivered" && !msg.deliveredAt) {
-        updatedMap[msg.id] = { ...msg, deliveredAt: isoTimestamp };
-      } else if (status === "read" && !msg.readAt) {
-        updatedMap[msg.id] = { ...msg, readAt: isoTimestamp };
-      }
+    const map = { ...prev.messageMap };
+    Object.values(map).forEach((m) => {
+      if (m.conversationId !== conversationId) return;
+      if (status === "delivered" && !m.deliveredAt) map[m.id] = { ...m, deliveredAt: iso };
+      if (status === "read" && !m.readAt) map[m.id] = { ...m, readAt: iso };
     });
-
-    return { messageMap: updatedMap };
+    return { messageMap: map };
   });
 };
 
+/**
+ * Mount this ONCE at the app root (e.g., in App.tsx).
+ * It registers listeners and connects the singleton socket.
+ */
 export function useWebSocket() {
-  const socketRef = useRef<Socket | null>(null);
+  const user = useUserInfoStore((s) => s.user);
+  const currentConversationId = useConversationIdStore((s) => s.conversationId);
 
-  const user = useUserInfoStore((state) => state.user);
-  const currentConversationId = useConversationIdStore(
-    (state) => state.conversationId
-  );
+  const setOnlineStatus = usePresenceStore((s) => s.setOnlineStatus);
+  const setTypingStatus = usePresenceStore((s) => s.setTypingStatus);
+  const updateLastMessage = useUsersListStore((s) => s.updateLastMessage);
+  const updateUserPresence = useUsersListStore((s) => s.updateUserPresence);
 
-  const setOnlineStatus = usePresenceStore((state) => state.setOnlineStatus);
-  const setTypingStatus = usePresenceStore((state) => state.setTypingStatus);
-  const updateLastMessage = useUsersListStore(
-    (state) => state.updateLastMessage
-  );
-  const updateUserPresence = useUsersListStore(
-    (state) => state.updateUserPresence
-  );
-
-  const previousConversationIdRef = useRef<string | null>(null);
+  const currentConvRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentConvRef.current = currentConversationId;
+  }, [currentConversationId]);
 
   useEffect(() => {
     if (!user) return;
 
-    socketRef.current = socket;
+    if (!socket.connected) socket.connect();
 
-    socket.on("connect", () => {
+    const onConnect = async () => {
       console.log("✅ Socket connected:", socket.id);
-    });
 
-    socket.on("disconnect", (reason) => {
+      // ---------------------------
+      // Step 1: Fetch and update all online users immediately
+      // ---------------------------
+      socket.emit("request:online:all"); // Or use your server API to get online users
+      // We'll handle the response in `status:online:all` listener
+
+      // Step 2: Join the current conversation
+      const cid = currentConvRef.current;
+      if (cid) socket.emit("conversation:join", { conversationId: cid });
+    };
+
+    const onDisconnect = (reason: string) => {
       console.log("❌ Socket disconnected:", reason);
-    });
+    };
 
-    socket.on("message:new", async (message: MessageWithSender) => {
-      const isFromOtherUser = message.senderId !== user.id;
-      const isInCurrentConversation =
-        message.conversationId === currentConversationId;
+    // ---------------------------
+    // Event handlers
+    // ---------------------------
+    const onMessageNew = (message: MessageWithSender) => {
+      const isFromOther = message.senderId !== user.id;
+      const isInCurrent = message.conversationId === currentConvRef.current;
 
-      if (isFromOtherUser && !isInCurrentConversation) {
-        socket.emit("message:delivered", {
-          conversationId: message.conversationId,
-        });
+      if (isFromOther && !isInCurrent) {
+        socket.emit("message:delivered", { conversationId: message.conversationId });
       }
-
-      if (isFromOtherUser && isInCurrentConversation) {
+      if (isFromOther && isInCurrent) {
         socket.emit("message:read", { conversationId: message.conversationId });
       }
 
-      // Add or update message in store
       useMessageListStore.getState().addOrUpdateMessage(message);
-
       updateLastMessage(message.conversationId, message);
-    });
+    };
 
-    socket.on("conversation:new", (conversation) => {
+    const onConversationNew = (conversation: Conversation) => {
       if (conversation.lastMessage) {
         updateLastMessage(conversation.id, conversation.lastMessage);
       }
-    });
-
-    socket.on("typing:start", ({ conversationId, userId }) => {
-      setTypingStatus(conversationId, userId, true);
-    });
-
-    socket.on("typing:stop", ({ conversationId, userId }) => {
-      setTypingStatus(conversationId, userId, false);
-    });
-
-    socket.on("status:online:all", ({ users }: { users: string[] }) => {
-      users.forEach((userId) => {
-        setOnlineStatus(userId, true);
-        updateUserPresence(userId, true);
-      });
-    });
-
-    socket.on("status:online", ({ userId }) => {
-      setOnlineStatus(userId, true);
-      updateUserPresence(userId, true);
-    });
-
-    socket.on("status:offline", ({ userId }) => {
-      setOnlineStatus(userId, false);
-      updateUserPresence(userId, false);
-    });
-
-    socket.on("message:delivered", ({ conversationId, deliveredAt }) => {
-      console.log("MessageDelivered");
-      updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
-    });
-
-    socket.on("message:read", ({ conversationId, readAt }) => {
-      console.log("MessageRead");
-      updateAllUnmarkedMessages(conversationId, readAt, "read");
-    });
-
-    const handleBeforeUnload = () => {
-      socket.disconnect();
     };
 
+    const onTypingStart = ({ conversationId, userId }: {conversationId: string, userId: string}) =>
+      setTypingStatus(conversationId, userId, true);
+    const onTypingStop = ({ conversationId, userId }: {conversationId: string, userId: string}) =>
+      setTypingStatus(conversationId, userId, false);
+
+    // ---------------------------
+    // Online/offline
+    // ---------------------------
+    const onOnlineAll = ({ users }: { users: string[] }) => {
+      // Immediately update store for all online users
+      users.forEach((uid) => {
+        setOnlineStatus(uid, true);
+        updateUserPresence(uid, true);
+      });
+    };
+
+    const onOnline = ({ userId }: {userId: string}) => {
+      setOnlineStatus(userId, true);
+      updateUserPresence(userId, true);
+    };
+
+    const onOffline = ({ userId }: {userId: string}) => {
+      setOnlineStatus(userId, false);
+      updateUserPresence(userId, false);
+    };
+
+    const onDelivered = ({ conversationId, deliveredAt }: {conversationId: string, deliveredAt: string}) =>
+      updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
+
+    const onRead = ({ conversationId, readAt }: {conversationId: string, readAt: string}) =>
+      updateAllUnmarkedMessages(conversationId, readAt, "read");
+
+    // ---------------------------
+    // Register listeners
+    // ---------------------------
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("message:new", onMessageNew);
+    socket.on("conversation:new", onConversationNew);
+    socket.on("typing:start", onTypingStart);
+    socket.on("typing:stop", onTypingStop);
+    socket.on("status:online:all", onOnlineAll);
+    socket.on("status:online", onOnline);
+    socket.on("status:offline", onOffline);
+    socket.on("message:delivered", onDelivered);
+    socket.on("message:read", onRead);
+
+    const handleBeforeUnload = () => socket.disconnect();
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("message:new", onMessageNew);
+      socket.off("conversation:new", onConversationNew);
+      socket.off("typing:start", onTypingStart);
+      socket.off("typing:stop", onTypingStop);
+      socket.off("status:online:all", onOnlineAll);
+      socket.off("status:online", onOnline);
+      socket.off("status:offline", onOffline);
+      socket.off("message:delivered", onDelivered);
+      socket.off("message:read", onRead);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, []);
+  }, [user]);
+}
 
-  useEffect(() => {
-    if (!socketRef.current?.connected || !user) return;
 
-    const socket = socketRef.current;
-    const prevId = previousConversationIdRef.current;
-    const currId = currentConversationId;
-
-    if (prevId && prevId !== currId) {
-      socket.emit("conversation:leave", { conversationId: prevId });
-    }
-
-    if (currId && currId !== prevId) {
-      socket.emit("conversation:join", { conversationId: currId });
-    }
-
-    previousConversationIdRef.current = currId;
-  }, [currentConversationId, user]);
-
+/**
+ * Use this in any component to emit events without adding listeners or touching connection state.
+ */
+export function useSocketEmitters() {
   const emitMessage = useCallback((message: MessageFromApi) => {
-    if (socketRef.current?.connected) {
-      socketRef.current.emit("message:new", message);
-    }
+    if (socket.connected) socket.emit("message:new", message);
   }, []);
 
-  const emitTyping = useCallback(
-    (type: "start" | "stop", conversationId: string) => {
-      if (!socketRef.current?.connected) return;
-      const event = type === "start" ? "typing:start" : "typing:stop";
-      socketRef.current.emit(event, { conversationId });
-    },
-    []
-  );
+  const emitTyping = useCallback((type: "start" | "stop", conversationId: string) => {
+    if (!socket.connected) return;
+    const event = type === "start" ? "typing:start" : "typing:stop";
+    socket.emit(event, { conversationId });
+  }, []);
 
-  return {
-    emitMessage,
-    emitTyping,
-  };
+  return { emitMessage, emitTyping };
 }

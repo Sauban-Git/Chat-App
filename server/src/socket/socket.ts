@@ -64,20 +64,28 @@ export async function setupSocket(server: HttpServer) {
       }
     }
 
-    // Presence: mark online
+    // -----------------------------
+    // Step 1: Presence - mark online
+    // -----------------------------
     await addUserOnlineClient(userId, clientId);
+
+    // Step 2: Send full online list to THIS socket ONLY
     const onlineUsers = await getAllOnlineUsers();
+    // This ensures the new user sees all currently online users immediately
     socket.emit("status:online:all", { users: onlineUsers });
-    io.emit("status:online", { userId });
+
+    // Step 3: Broadcast to others that THIS user is online
+    socket.broadcast.emit("status:online", { userId });
     console.log(`✅ status:online — user ${userId}`);
 
-    // Auto-subscribe client to all conversations where user is participant
+    // -----------------------------
+    // Step 4: Auto-subscribe to conversations
+    // -----------------------------
     const userConversations = await prisma.conversation.findMany({
-      where: {
-        OR: [{ user1Id: userId }, { user2Id: userId }],
-      },
+      where: { OR: [{ user1Id: userId }, { user2Id: userId }] },
       select: { id: true },
     });
+
     const subs = new Set<string>();
     for (const conv of userConversations) {
       await addConversationSubscriber(conv.id, clientId);
