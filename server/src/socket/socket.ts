@@ -80,7 +80,6 @@ export async function setupSocket(server: HttpServer) {
 
     // Get full online list
     const onlineUsers = await getAllOnlineUsers();
-    console.log("Online Users: ", onlineUsers);
 
     // Emit updated full online list to all connected clients
     io.emit("status:online:all", onlineUsers);
@@ -149,17 +148,20 @@ export async function setupSocket(server: HttpServer) {
     socket.on("message:new", async ({ conversationId, text }) => {
       if (!conversationId || !text) return;
 
+      // Validate conversation and participants
       const conv = await prisma.conversation.findUnique({
         where: { id: conversationId },
         select: { user1Id: true, user2Id: true },
       });
       if (!conv || (userId !== conv.user1Id && userId !== conv.user2Id)) return;
 
+      // Create new message
       const newMessage = await prisma.message.create({
         data: { conversationId, senderId: userId, text },
         include: { sender: { select: { id: true, name: true, email: true } } },
       });
 
+      // Broadcast "message:new" to all subscribers (existing behavior)
       const cids = await getConversationSubscribers(conversationId);
       for (const cid of cids) {
         const s = io.sockets.sockets.get(cid);
@@ -173,6 +175,52 @@ export async function setupSocket(server: HttpServer) {
           readAt: newMessage.readAt,
         });
       }
+
+      // --------------------------
+      // New logic: auto delivered/read
+      // --------------------------
+      const receiverId = conv.user1Id === userId ? conv.user2Id : conv.user1Id;
+
+      // Find active sockets of receiver
+      const receiverSockets = [...io.sockets.sockets.values()].filter(
+        (s) => s.data.userId === receiverId
+      );
+
+      if (receiverSockets.length > 0) {
+        let markedRead = false;
+
+        for (const rs of receiverSockets) {
+          const subs = clientSubscriptions.get(rs.id) || new Set();
+
+          if (subs.has(conversationId)) {
+            // Receiver is subscribed (chat window open)
+            if (!markedRead) {
+              await prisma.message.update({
+                where: { id: newMessage.id },
+                data: { readAt: new Date(), deliveredAt: new Date() },
+              });
+              markedRead = true;
+            }
+            rs.emit("message:read", {
+              conversationId,
+              messageId: newMessage.id,
+              readAt: new Date().toISOString(),
+            });
+          } else {
+            // Receiver connected but not subscribed
+            await prisma.message.update({
+              where: { id: newMessage.id },
+              data: { deliveredAt: new Date() },
+            });
+            rs.emit("message:delivered", {
+              conversationId,
+              messageId: newMessage.id,
+              deliveredAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+      // If no active socket → do nothing
     });
 
     socket.on("message:deliver", ({ conversationId }) =>
@@ -210,7 +258,11 @@ export async function setupSocket(server: HttpServer) {
     // -----------------------------
     socket.on("request:online:all", async () => {
       const allUserStatuses = await getAllOnlineUsers();
-      socket.emit("status:online:all", allUserStatuses);
+      io.emit("status:online:all", onlineUsers);
+      console.log(
+        "Online Users Emitting from req even to status even: ",
+        onlineUsers
+      );
     });
 
     // -----------------------------
@@ -233,7 +285,6 @@ export async function setupSocket(server: HttpServer) {
 
       // Emit updated full online list to all connected clients
       const onlineUsers = await getAllOnlineUsers();
-      console.log("💚 Online users:", onlineUsers);
 
       io.emit("status:online:all", onlineUsers);
     });

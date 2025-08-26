@@ -91,7 +91,6 @@ export async function isUserOnline(userId: string): Promise<boolean> {
 // Returns array of online userIds
 export async function getAllOnlineUsers(): Promise<{ [userId: string]: boolean }> {
   const allStatuses = await redisClient.hGetAll(USER_STATUS_HASH);
-  console.log("all statuses: ", allStatuses);
 
   return Object.fromEntries(
     Object.entries(allStatuses).map(([userId, status]) => [

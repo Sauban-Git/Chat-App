@@ -33,6 +33,7 @@ const updateAllUnmarkedMessages = (
 export function useWebSocket() {
   const user = useUserInfoStore((s) => s.user);
   const currentConversationId = useConversationIdStore((s) => s.conversationId);
+  const recipientId = useConversationIdStore((s) => s.recipientId)
   const setUserStatus = useUserOnlineStatusStore(
     (state) => state.setUserStatus
   );
@@ -44,6 +45,17 @@ export function useWebSocket() {
   useEffect(() => {
     currentConvRef.current = currentConversationId;
   }, [currentConversationId]);
+
+  const isOnline = useUserOnlineStatusStore((state) =>
+  recipientId ? state.usersStatus[recipientId] : false
+);
+
+useEffect(() => {
+  if (recipientId && isOnline === undefined) {
+    console.log("⚠️ Recipient status missing, refetching...");
+    socket.emit("request:online:all");
+  }
+}, []);
 
   useEffect(() => {
     if (!user) return;
@@ -73,6 +85,7 @@ export function useWebSocket() {
     // Correct typing for the parameter — an object mapping userId to boolean
     const onOnlineAll = (allOnlineUsers: { [userId: string]: boolean }) => {
       setUserStatus(allOnlineUsers);
+      console.log("getting allonlineusers listt from server", allOnlineUsers);
     };
 
     // const onOnline = ({ userId }: { userId: string }) => {
@@ -102,18 +115,6 @@ export function useWebSocket() {
     }) => setTypingStatus(conversationId, userId, false);
 
     const onMessageNew = (message: MessageWithSender) => {
-      const isFromOther = message.senderId !== user.id;
-      const isInCurrent = message.conversationId === currentConvRef.current;
-
-      if (isFromOther && !isInCurrent) {
-        socket.emit("message:delivered", {
-          conversationId: message.conversationId,
-        });
-      }
-      if (isFromOther && isInCurrent) {
-        socket.emit("message:read", { conversationId: message.conversationId });
-      }
-
       useMessageListStore.getState().addOrUpdateMessage(message);
       updateLastMessage(message.conversationId, message);
     };

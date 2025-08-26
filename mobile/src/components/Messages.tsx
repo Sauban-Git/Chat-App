@@ -69,7 +69,9 @@ export const Messages = () => {
       console.error("Error sending message:", error);
     }
   };
-  useEffect(() => {}, [emitMessage, isOnline, recipientId]);
+  useEffect(() => {
+    console.log("ReciepentId: ",recipientId,": isOnline: ", isOnline);
+  }, [emitMessage, isOnline, recipientId]);
 
   return (
     <div className="rounded-xl p-4 h-[100dvh]">
