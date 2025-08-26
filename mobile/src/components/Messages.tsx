@@ -6,7 +6,7 @@ import { useConversationIdStore } from "../store/conversationIdStore";
 import axios from "../utils/axios";
 import type { MessageFromApi } from "../types/types";
 import { useSocketEmitters } from "../customHooks/useWebSocket";
-import { usePresenceStore } from "../store/userPresenceStore";
+import useUserOnlineStatusStore from "../store/userOnlineStatusStore";
 import { useUserInfoStore } from "../store/userInfoStore";
 // import { useUserInfoStore } from "../store/userInfoStore";
 
@@ -26,9 +26,8 @@ export const Messages = () => {
 
   const { emitMessage, emitTyping } = useSocketEmitters();
 
-
-  const isOnline = usePresenceStore((state) =>
-    recipientId ? state.onlineStatus[recipientId] : false
+  const isOnline = useUserOnlineStatusStore((state) =>
+    recipientId ? state.usersStatus[recipientId] : false
   );
 
   const handleSend = async () => {

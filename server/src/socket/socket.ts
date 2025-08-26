@@ -22,7 +22,11 @@ const clientSubscriptions = new Map<string, Set<string>>();
 
 export async function setupSocket(server: HttpServer) {
   const io = new SocketIOServer(server, {
-    cors: { origin: process.env.CLIENT_URL, methods: ["GET", "POST"], credentials: true },
+    cors: {
+      origin: process.env.CLIENT_URL,
+      methods: ["GET", "POST"],
+      credentials: true,
+    },
     pingTimeout: 10000,
     pingInterval: 5000,
   });
@@ -72,12 +76,14 @@ export async function setupSocket(server: HttpServer) {
     await markUserOnline(userId);
 
     // Send full online list
+    await markUserOnline(userId);
+
+    // Get full online list
     const onlineUsers = await getAllOnlineUsers();
     console.log("Online Users: ", onlineUsers);
-    socket.emit("status:online:all", { users: onlineUsers });
 
-    // Broadcast to others
-    io.emit("status:online", { userId });
+    // Emit updated full online list to all connected clients
+    io.emit("status:online:all", onlineUsers);
 
     // -----------------------------
     // Subscribe to conversations
@@ -98,27 +104,45 @@ export async function setupSocket(server: HttpServer) {
     // -----------------------------
     // Typing / messaging
     // -----------------------------
-    const handleTyping = async (event: "typing:start" | "typing:stop", conversationId: string) => {
+    const handleTyping = async (
+      event: "typing:start" | "typing:stop",
+      conversationId: string
+    ) => {
       const cids = await getConversationSubscribers(conversationId);
       for (const cid of cids) {
         const s = io.sockets.sockets.get(cid);
-        if (s && s.data.clientId !== clientId) s.emit(event, { conversationId, userId });
+        if (s && s.data.clientId !== clientId)
+          s.emit(event, { conversationId, userId });
       }
     };
 
-    socket.on("typing:start", ({ conversationId }) => handleTyping("typing:start", conversationId));
-    socket.on("typing:stop", ({ conversationId }) => handleTyping("typing:stop", conversationId));
+    socket.on("typing:start", ({ conversationId }) =>
+      handleTyping("typing:start", conversationId)
+    );
+    socket.on("typing:stop", ({ conversationId }) =>
+      handleTyping("typing:stop", conversationId)
+    );
 
-    const handleMessageUpdate = async (type: "delivered" | "read", conversationId: string) => {
+    const handleMessageUpdate = async (
+      type: "delivered" | "read",
+      conversationId: string
+    ) => {
       const now = new Date();
-      const where = { conversationId, senderId: { not: userId }, [`${type}At`]: null } as any;
+      const where = {
+        conversationId,
+        senderId: { not: userId },
+        [`${type}At`]: null,
+      } as any;
       const data = { [`${type}At`]: now } as any;
       await prisma.message.updateMany({ where, data });
 
       const cids = await getConversationSubscribers(conversationId);
       for (const cid of cids) {
         const s = io.sockets.sockets.get(cid);
-        s?.emit(`message:${type}`, { conversationId, [`${type}At`]: now.toISOString() });
+        s?.emit(`message:${type}`, {
+          conversationId,
+          [`${type}At`]: now.toISOString(),
+        });
       }
     };
 
@@ -151,8 +175,12 @@ export async function setupSocket(server: HttpServer) {
       }
     });
 
-    socket.on("message:deliver", ({ conversationId }) => handleMessageUpdate("delivered", conversationId));
-    socket.on("message:read", ({ conversationId }) => handleMessageUpdate("read", conversationId));
+    socket.on("message:deliver", ({ conversationId }) =>
+      handleMessageUpdate("delivered", conversationId)
+    );
+    socket.on("message:read", ({ conversationId }) =>
+      handleMessageUpdate("read", conversationId)
+    );
 
     // -----------------------------
     // Join / leave conversations
@@ -181,25 +209,33 @@ export async function setupSocket(server: HttpServer) {
     // Support request:online:all
     // -----------------------------
     socket.on("request:online:all", async () => {
-      const allOnline = await getAllOnlineUsers();
-      socket.emit("status:online:all", { users: allOnline });
+      const allUserStatuses = await getAllOnlineUsers();
+      socket.emit("status:online:all", allUserStatuses);
     });
 
     // -----------------------------
     // Disconnect
     // -----------------------------
     socket.on("disconnect", async () => {
-      clientSubscriptions.get(clientId)?.forEach(async (convId) => await removeConversationSubscriber(convId, clientId));
+      clientSubscriptions
+        .get(clientId)
+        ?.forEach(
+          async (convId) => await removeConversationSubscriber(convId, clientId)
+        );
       clientSubscriptions.delete(clientId);
 
-      const activeSockets = [...io.sockets.sockets.values()].filter((s) => s.data.userId === userId);
+      const activeSockets = [...io.sockets.sockets.values()].filter(
+        (s) => s.data.userId === userId
+      );
       if (activeSockets.length === 0) {
         await markUserOffline(userId);
-        io.emit("status:offline", { userId });
       }
 
+      // Emit updated full online list to all connected clients
       const onlineUsers = await getAllOnlineUsers();
       console.log("💚 Online users:", onlineUsers);
+
+      io.emit("status:online:all", onlineUsers);
     });
   });
 

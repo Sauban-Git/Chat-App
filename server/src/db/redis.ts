@@ -25,28 +25,44 @@ export async function addConversationSubscriber(
   conversationId: string,
   clientId: string
 ): Promise<void> {
-  await redisClient.sAdd(CONVERSATION_SUBSCRIBERS_PREFIX + conversationId, clientId);
+  await redisClient.sAdd(
+    CONVERSATION_SUBSCRIBERS_PREFIX + conversationId,
+    clientId
+  );
 }
 
 export async function removeConversationSubscriber(
   conversationId: string,
   clientId: string
 ): Promise<void> {
-  await redisClient.sRem(CONVERSATION_SUBSCRIBERS_PREFIX + conversationId, clientId);
+  await redisClient.sRem(
+    CONVERSATION_SUBSCRIBERS_PREFIX + conversationId,
+    clientId
+  );
 }
 
-export async function getConversationSubscribers(conversationId: string): Promise<string[]> {
-  return await redisClient.sMembers(CONVERSATION_SUBSCRIBERS_PREFIX + conversationId);
+export async function getConversationSubscribers(
+  conversationId: string
+): Promise<string[]> {
+  return await redisClient.sMembers(
+    CONVERSATION_SUBSCRIBERS_PREFIX + conversationId
+  );
 }
 
 // ----------------------
 // User Subscribers (for conversation lists)
 // ----------------------
-export async function addUserSubscriber(userId: string, clientId: string): Promise<void> {
+export async function addUserSubscriber(
+  userId: string,
+  clientId: string
+): Promise<void> {
   await redisClient.sAdd(USER_SUBSCRIBERS_PREFIX + userId, clientId);
 }
 
-export async function removeUserSubscriber(userId: string, clientId: string): Promise<void> {
+export async function removeUserSubscriber(
+  userId: string,
+  clientId: string
+): Promise<void> {
   await redisClient.sRem(USER_SUBSCRIBERS_PREFIX + userId, clientId);
 }
 
@@ -73,13 +89,18 @@ export async function isUserOnline(userId: string): Promise<boolean> {
 }
 
 // Returns array of online userIds
-export async function getAllOnlineUsers(): Promise<string[]> {
+export async function getAllOnlineUsers(): Promise<{ [userId: string]: boolean }> {
   const allStatuses = await redisClient.hGetAll(USER_STATUS_HASH);
-  console.log("all statuses: ",allStatuses)
-  return Object.entries(allStatuses)
-    .filter(([_, status]) => status === "online")
-    .map(([userId]) => userId);
+  console.log("all statuses: ", allStatuses);
+
+  return Object.fromEntries(
+    Object.entries(allStatuses).map(([userId, status]) => [
+      userId,
+      status === "online"
+    ])
+  );
 }
+
 
 // ----------------------
 // Cleanup / Quit

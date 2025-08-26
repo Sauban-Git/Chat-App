@@ -5,7 +5,12 @@ import { useConversationIdStore } from "../store/conversationIdStore";
 import { usePresenceStore } from "../store/userPresenceStore";
 import { useUsersListStore } from "../store/conversationListStore";
 import { useMessageListStore } from "../store/messagesListStore";
-import type { Conversation, MessageFromApi, MessageWithSender } from "../types/types";
+import type {
+  Conversation,
+  MessageFromApi,
+  MessageWithSender,
+} from "../types/types";
+import useUserOnlineStatusStore from "../store/userOnlineStatusStore";
 
 const updateAllUnmarkedMessages = (
   conversationId: string,
@@ -17,7 +22,8 @@ const updateAllUnmarkedMessages = (
     const map = { ...prev.messageMap };
     Object.values(map).forEach((m) => {
       if (m.conversationId !== conversationId) return;
-      if (status === "delivered" && !m.deliveredAt) map[m.id] = { ...m, deliveredAt: iso };
+      if (status === "delivered" && !m.deliveredAt)
+        map[m.id] = { ...m, deliveredAt: iso };
       if (status === "read" && !m.readAt) map[m.id] = { ...m, readAt: iso };
     });
     return { messageMap: map };
@@ -27,10 +33,11 @@ const updateAllUnmarkedMessages = (
 export function useWebSocket() {
   const user = useUserInfoStore((s) => s.user);
   const currentConversationId = useConversationIdStore((s) => s.conversationId);
+  const setUserStatus = useUserOnlineStatusStore(
+    (state) => state.setUserStatus
+  );
 
-  const setOnlineStatus = usePresenceStore((s) => s.setOnlineStatus);
   const setTypingStatus = usePresenceStore((s) => s.setTypingStatus);
-  const updateUserPresence = useUsersListStore((s) => s.updateUserPresence);
   const updateLastMessage = useUsersListStore((s) => s.updateLastMessage);
 
   const currentConvRef = useRef<string | null>(null);
@@ -53,7 +60,9 @@ export function useWebSocket() {
 
       // Join current conversation
       if (currentConvRef.current) {
-        socket.emit("conversation:join", { conversationId: currentConvRef.current });
+        socket.emit("conversation:join", {
+          conversationId: currentConvRef.current,
+        });
       }
     };
 
@@ -61,43 +70,45 @@ export function useWebSocket() {
       console.log("❌ Socket disconnected:", reason);
     };
 
-    const onOnlineAll = ({ users }: { users: string[] }) => {
-      console.log("💚 Online users (full list):", users);
-      usePresenceStore.setState((prev) => {
-        const newStatus: Record<string, boolean> = { ...prev.onlineStatus };
-        // Set online for users in the list
-        users.forEach((uid) => (newStatus[uid] = true));
-        // Set offline for users not in the list
-        Object.keys(newStatus).forEach((uid) => {
-          if (!users.includes(uid)) newStatus[uid] = false;
-        });
-        return { onlineStatus: newStatus };
-      });
-      users.forEach((uid) => updateUserPresence(uid, true));
+    // Correct typing for the parameter — an object mapping userId to boolean
+    const onOnlineAll = (allOnlineUsers: { [userId: string]: boolean }) => {
+      setUserStatus(allOnlineUsers);
     };
 
-    const onOnline = ({ userId }: { userId: string }) => {
-      setOnlineStatus(userId, true);
-      updateUserPresence(userId, true);
-    };
+    // const onOnline = ({ userId }: { userId: string }) => {
+    //   setOnlineStatus(userId, true);
+    //   updateUserPresence(userId, true);
+    // };
 
-    const onOffline = ({ userId }: { userId: string }) => {
-      setOnlineStatus(userId, false);
-      updateUserPresence(userId, false);
-    };
+    // const onOffline = ({ userId }: { userId: string }) => {
+    //   setOnlineStatus(userId, false);
+    //   updateUserPresence(userId, false);
+    // };
 
-    const onTypingStart = ({ conversationId, userId }: { conversationId: string; userId: string }) =>
-      setTypingStatus(conversationId, userId, true);
+    const onTypingStart = ({
+      conversationId,
+      userId,
+    }: {
+      conversationId: string;
+      userId: string;
+    }) => setTypingStatus(conversationId, userId, true);
 
-    const onTypingStop = ({ conversationId, userId }: { conversationId: string; userId: string }) =>
-      setTypingStatus(conversationId, userId, false);
+    const onTypingStop = ({
+      conversationId,
+      userId,
+    }: {
+      conversationId: string;
+      userId: string;
+    }) => setTypingStatus(conversationId, userId, false);
 
     const onMessageNew = (message: MessageWithSender) => {
       const isFromOther = message.senderId !== user.id;
       const isInCurrent = message.conversationId === currentConvRef.current;
 
       if (isFromOther && !isInCurrent) {
-        socket.emit("message:delivered", { conversationId: message.conversationId });
+        socket.emit("message:delivered", {
+          conversationId: message.conversationId,
+        });
       }
       if (isFromOther && isInCurrent) {
         socket.emit("message:read", { conversationId: message.conversationId });
@@ -108,14 +119,25 @@ export function useWebSocket() {
     };
 
     const onConversationNew = (conversation: Conversation) => {
-      if (conversation.lastMessage) updateLastMessage(conversation.id, conversation.lastMessage);
+      if (conversation.lastMessage)
+        updateLastMessage(conversation.id, conversation.lastMessage);
     };
 
-    const onDelivered = ({ conversationId, deliveredAt }: { conversationId: string; deliveredAt: string }) =>
-      updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
+    const onDelivered = ({
+      conversationId,
+      deliveredAt,
+    }: {
+      conversationId: string;
+      deliveredAt: string;
+    }) => updateAllUnmarkedMessages(conversationId, deliveredAt, "delivered");
 
-    const onRead = ({ conversationId, readAt }: { conversationId: string; readAt: string }) =>
-      updateAllUnmarkedMessages(conversationId, readAt, "read");
+    const onRead = ({
+      conversationId,
+      readAt,
+    }: {
+      conversationId: string;
+      readAt: string;
+    }) => updateAllUnmarkedMessages(conversationId, readAt, "read");
 
     // ---------------------------
     // Register listeners
@@ -123,8 +145,8 @@ export function useWebSocket() {
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("status:online:all", onOnlineAll);
-    socket.on("status:online", onOnline);
-    socket.on("status:offline", onOffline);
+    // socket.on("status:online", onOnline);
+    // socket.on("status:offline", onOffline);
     socket.on("typing:start", onTypingStart);
     socket.on("typing:stop", onTypingStop);
     socket.on("message:new", onMessageNew);
@@ -139,8 +161,8 @@ export function useWebSocket() {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("status:online:all", onOnlineAll);
-      socket.off("status:online", onOnline);
-      socket.off("status:offline", onOffline);
+      // socket.off("status:online", onOnline);
+      // socket.off("status:offline", onOffline);
       socket.off("typing:start", onTypingStart);
       socket.off("typing:stop", onTypingStop);
       socket.off("message:new", onMessageNew);
@@ -163,7 +185,9 @@ export function useSocketEmitters() {
   const emitTyping = useCallback(
     (type: "start" | "stop", conversationId: string) => {
       if (!socket.connected) return;
-      socket.emit(type === "start" ? "typing:start" : "typing:stop", { conversationId });
+      socket.emit(type === "start" ? "typing:start" : "typing:stop", {
+        conversationId,
+      });
     },
     []
   );
